@@ -1,0 +1,10 @@
+{
+  "screen.worldedit-magician.openai.title": "OpenAI Settings",
+  "screen.worldedit-magician.openai.api_key": "OpenAI API Key",
+  "screen.worldedit-magician.openai.api_key_hint": "sk-...",
+  "screen.worldedit-magician.openai.provider": "AI Provider Base URL",
+  "screen.worldedit-magician.openai.provider_hint": "https://api.openai.com/v1",
+  "screen.worldedit-magician.openai.save": "Save",
+  "key.worldedit-magician.openai_settings": "OpenAI settings",
+  "key.category.worldedit-magician.general": "WorldEdit Magician"
+}
