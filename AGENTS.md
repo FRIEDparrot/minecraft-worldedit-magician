@@ -1,0 +1,15 @@
+This should be a plugin that full developed by Agent
+
+## Mistake Log
+
+- Minecraft GUI text colors must use opaque ARGB values. RGB values such as `0xFFFFFF` have zero alpha in this rendering API and make text invisible; use `0xFFFFFFFF.toInt()` for white and equivalent `0xFFRRGGBB.toInt()` values for colored text.
+- When adding an `AiProvider` enum value, update every exhaustive `when` expression in the client in the same integration change before running the build.
+- Verify Minecraft widget APIs against the target mappings before relying on a control pattern. The `CycleButton` builder signature in this target differed from the assumed overload; use a simple paged or direct-button control when the mapped API is uncertain, then compile immediately.
+- The target Minecraft version uses the four-argument `mouseScrolled(mouseX, mouseY, horizontalAmount, verticalAmount)` callback. Do not assume the legacy one-argument scroll override; compile UI overrides against the current mappings immediately.
+- `CompletableFuture` is invariant in Kotlin. When a branch returns a subtype such as `Failure`, explicitly type immediate futures and `runCatching` results as the sealed result interface to preserve the declared API return type.
+- Keep selected models provider-scoped. Never use one provider's model as another provider's fallback; a provider switch must load that provider's saved model or an empty selection.
+- `EditBox` defaults to a 32-character maximum. Set a credential field's maximum length before assigning its saved value; assigning first silently truncates the value and can persist the damaged credential.
+- Never put API keys or access tokens in URL query strings. Use the provider's supported authentication header so credentials are not retained by URLs, proxy logs, or diagnostics.
+- An asynchronously loaded UI result must be applied only to the current draft state; do not reopen a screen from the stale snapshot captured before the request started, because that discards concurrent player edits.
+- Do not label a loaded dependency as compatible solely because its mod ID is present. Inspect its declared Minecraft version constraint, or state that only loader compatibility has been confirmed.
+- Whenever an implementation mistake is identified, record the cause and the preventative rule in this file before completing the task.
