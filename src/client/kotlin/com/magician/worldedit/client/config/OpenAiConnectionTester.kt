@@ -31,9 +31,15 @@ object OpenAiConnectionTester {
 			return CompletableFuture.completedFuture(OpenAiConnectionResult.Failure(exception.message ?: "Enter a valid base URL."))
 		}
 		val body = JsonObject().apply {
-			addProperty("model", model.trim().ifBlank { "gpt-4.1-nano" })
-			addProperty("input", "Connection test. Reply with OK.")
-			addProperty("max_output_tokens", 16)
+			addProperty("model", model)
+			addProperty("stream", false)
+			add("messages", com.google.gson.JsonArray().apply {
+				add(JsonObject().apply {
+					addProperty("role", "user")
+					addProperty("content", "Reply with exactly OK.")
+				})
+			})
+			addProperty("max_tokens", 16)
 		}.toString()
 		val request = HttpRequest.newBuilder(endpoint)
 			.timeout(Duration.ofSeconds(4))
@@ -46,7 +52,7 @@ object OpenAiConnectionTester {
 			.handle { response, error ->
 				when {
 					error != null -> OpenAiConnectionResult.Failure(errorMessage(error))
-					response.statusCode() in 200..299 -> OpenAiConnectionResult.Success("Connection successful. Responses API is available.")
+					response.statusCode() in 200..299 -> OpenAiConnectionResult.Success("Connection successful. Chat Completions API is available.")
 					else -> OpenAiConnectionResult.Failure("Connection failed (${response.statusCode()}): ${errorMessage(response.body())}")
 				}
 			}

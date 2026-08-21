@@ -157,8 +157,12 @@ object WorldeditMagicianClient : ClientModInitializer {
                 }
             }
             while (cancelSelectionKey.consumeClick()) {
-                if (ChunkSelectionState.cancelCurrentSelection()) {
-                    sendSelectionMessage("Selection cancelled.")
+                if (isControlDown() && isShiftDown()) {
+                    if (ChunkSelectionState.cancelCurrentSelection()) {
+                        sendSelectionMessage("All chunk selections cleared.")
+                    }
+                } else if (ChunkSelectionState.cancelPendingSelection()) {
+                    sendSelectionMessage("Selection draft cancelled.")
                 }
             }
         }
@@ -185,7 +189,7 @@ object WorldeditMagicianClient : ClientModInitializer {
                     Command.SINGLE_SUCCESS
                 })),
         )
-        .then(literal("msg").then(argument("prompt", StringArgumentType.greedyString()).executes { context ->
+        .then(literal("chat").then(argument("prompt", StringArgumentType.greedyString()).executes { context ->
             sendPrompt(StringArgumentType.getString(context, "prompt"))
             Command.SINGLE_SUCCESS
         }))
@@ -458,7 +462,7 @@ object WorldeditMagicianClient : ClientModInitializer {
         ChunkSelectionMode.CORNER -> "Two corners"
     }
 
-    private fun selectionInstructions(): String = "Ctrl+left-click targets; right-click confirms; Delete cancels."
+    private fun selectionInstructions(): String = "Ctrl+left-click targets; right-click confirms; Delete cancels draft; Ctrl+Shift+Delete clears all."
 
     private fun sendSelectionMessage(message: String) {
         Minecraft.getInstance().player?.displayClientMessage(Component.literal("[WEMC] $message"), true)
@@ -468,6 +472,18 @@ object WorldeditMagicianClient : ClientModInitializer {
         val window = Minecraft.getInstance().window
         return InputConstants.isKeyDown(window, GLFW.GLFW_KEY_LEFT_CONTROL) ||
             InputConstants.isKeyDown(window, GLFW.GLFW_KEY_RIGHT_CONTROL)
+    }
+
+    private fun isShiftDown(): Boolean {
+        val window = Minecraft.getInstance().window
+        return InputConstants.isKeyDown(window, GLFW.GLFW_KEY_LEFT_SHIFT) ||
+            InputConstants.isKeyDown(window, GLFW.GLFW_KEY_RIGHT_SHIFT)
+    }
+
+    private fun isAltDown(): Boolean {
+        val window = Minecraft.getInstance().window
+        return InputConstants.isKeyDown(window, GLFW.GLFW_KEY_LEFT_ALT) ||
+            InputConstants.isKeyDown(window, GLFW.GLFW_KEY_RIGHT_ALT)
     }
 
     @JvmStatic
@@ -482,15 +498,30 @@ object WorldeditMagicianClient : ClientModInitializer {
         }
 
         val level = player.level()
-        if (isControlDown()) {
-            return ChunkSelectionState.moveYRange(amount, level.minY, level.maxY - 1)
+        val shiftDown = isShiftDown()
+        val altDown = isAltDown()
+        return when {
+            isControlDown() && shiftDown ->
+                ChunkSelectionState.adjustYRange(
+                    adjustLowerBound = false,
+                    amount = amount,
+                    worldMinY = level.minY,
+                    worldMaxY = level.maxY - 1,
+                )
+            isControlDown() && altDown ->
+                ChunkSelectionState.adjustYRange(
+                    adjustLowerBound = true,
+                    amount = -amount,
+                    worldMinY = level.minY,
+                    worldMaxY = level.maxY - 1,
+                )
+            ChunkSelectionState.selectionMode == ChunkSelectionMode.CORNER && !isControlDown() &&
+                ChunkSelectionState.awaitingSecondCorner() -> {
+                val (deltaX, deltaZ) = cornerDelta(player.direction, amount)
+                ChunkSelectionState.moveCornerSelection(deltaX, deltaZ) != null
+            }
+            else -> false
         }
-        if (ChunkSelectionState.selectionMode != ChunkSelectionMode.CORNER || !ChunkSelectionState.awaitingSecondCorner()) {
-            return false
-        }
-
-        val (deltaX, deltaZ) = cornerDelta(player.direction, amount)
-        return ChunkSelectionState.moveCornerSelection(deltaX, deltaZ) != null
     }
 
     private fun cornerDelta(direction: Direction, amount: Int): Pair<Int, Int> = when (direction) {

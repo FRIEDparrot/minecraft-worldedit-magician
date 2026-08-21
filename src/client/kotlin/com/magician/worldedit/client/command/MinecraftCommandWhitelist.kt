@@ -15,7 +15,7 @@ sealed interface CommandSequenceValidation {
  * commands are excluded because they would bypass the policy.
  */
 object MinecraftCommandWhitelist {
-    const val MAX_SEQUENCE_LENGTH = 16
+    const val MAX_SEQUENCE_LENGTH = 100
 
     val agentCommands: List<AgentCommandInfo> = listOf(
         command("/time set <day|night|noon|midnight|ticks>", "Set the world time. This operation is not reversible.", "time set noon"),
@@ -45,7 +45,11 @@ object MinecraftCommandWhitelist {
 
     fun validateSequence(commands: List<String>): CommandSequenceValidation {
         if (commands.isEmpty()) return CommandSequenceValidation.Invalid("No commands were provided.")
-        if (commands.size > MAX_SEQUENCE_LENGTH) return CommandSequenceValidation.Invalid("A sequence may contain at most $MAX_SEQUENCE_LENGTH commands.")
+        if (commands.size > MAX_SEQUENCE_LENGTH) {
+            return CommandSequenceValidation.Invalid(
+                "A sequence may contain at most $MAX_SEQUENCE_LENGTH commands. Use /wemc flow for a planned multi-step operation.",
+            )
+        }
 
         val normalized = commands.mapIndexed { index, raw ->
             val command = raw.trim().removePrefix("/")

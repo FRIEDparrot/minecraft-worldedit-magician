@@ -40,15 +40,26 @@ class ChunkSelectionStateTest {
     }
 
     @Test
-    fun `confirm commits the preview while cancel removes both draft and confirmed selection`() {
+    fun `plain cancel removes only the unconfirmed draft`() {
         ChunkSelectionState.stageChunkSelection(ChunkPos(3, 5))
         assertNotNull(ChunkSelectionState.confirmPendingSelection())
+        ChunkSelectionState.stageChunkSelection(ChunkPos(8, 9))
+
+        assertTrue(ChunkSelectionState.cancelPendingSelection())
         assertEquals(setOf(ChunkPos(3, 5)), ChunkSelectionState.selectedChunks)
+        assertNull(ChunkSelectionState.pendingSelection)
+        assertFalse(ChunkSelectionState.cancelPendingSelection())
+    }
+
+    @Test
+    fun `full cancel removes both the draft and confirmed selection`() {
+        ChunkSelectionState.stageChunkSelection(ChunkPos(3, 5))
+        assertNotNull(ChunkSelectionState.confirmPendingSelection())
+        ChunkSelectionState.stageChunkSelection(ChunkPos(8, 9))
 
         assertTrue(ChunkSelectionState.cancelCurrentSelection())
         assertTrue(ChunkSelectionState.selectedChunks.isEmpty())
         assertNull(ChunkSelectionState.pendingSelection)
-        assertFalse(ChunkSelectionState.cancelCurrentSelection())
     }
 
     @Test
@@ -68,5 +79,31 @@ class ChunkSelectionStateTest {
         assertTrue(ChunkSelectionState.moveYRange(-500, -64, 319))
         assertEquals(-64, ChunkSelectionState.config.minY)
         assertEquals(-44, ChunkSelectionState.config.maxY)
+    }
+
+    @Test
+    fun `upper-bound adjustment expands and contracts the top`() {
+        ChunkSelectionState.updateConfig(ChunkSelectionConfig(minY = 100, maxY = 120))
+
+        assertTrue(ChunkSelectionState.adjustYRange(adjustLowerBound = false, amount = 1, worldMinY = -64, worldMaxY = 319))
+        assertEquals(100, ChunkSelectionState.config.minY)
+        assertEquals(121, ChunkSelectionState.config.maxY)
+
+        assertTrue(ChunkSelectionState.adjustYRange(adjustLowerBound = false, amount = -1, worldMinY = -64, worldMaxY = 319))
+        assertEquals(100, ChunkSelectionState.config.minY)
+        assertEquals(120, ChunkSelectionState.config.maxY)
+    }
+
+    @Test
+    fun `lower-bound adjustment expands and contracts the bottom`() {
+        ChunkSelectionState.updateConfig(ChunkSelectionConfig(minY = 100, maxY = 120))
+
+        assertTrue(ChunkSelectionState.adjustYRange(adjustLowerBound = true, amount = -1, worldMinY = -64, worldMaxY = 319))
+        assertEquals(99, ChunkSelectionState.config.minY)
+        assertEquals(120, ChunkSelectionState.config.maxY)
+
+        assertTrue(ChunkSelectionState.adjustYRange(adjustLowerBound = true, amount = 1, worldMinY = -64, worldMaxY = 319))
+        assertEquals(100, ChunkSelectionState.config.minY)
+        assertEquals(120, ChunkSelectionState.config.maxY)
     }
 }

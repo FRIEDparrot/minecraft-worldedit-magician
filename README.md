@@ -17,6 +17,24 @@ The standard torch is the chunk selection tool. While holding it, an in-world WE
 
 The selected operation is captured when the area is prepared. Changing mode or shape discards an unfinished draft, so it cannot be committed under a different operation.
 
+## AI chat and command execution
+
+Use `/wemc chat <message>` for conversational requests. The agent may answer normally; it may request Minecraft execution only by placing commands in an explicit fenced block:
+
+```wemc-commands
+time set noon
+```
+
+For the time-setting smoke test:
+
+1. Configure an AI provider and model with `/wemc config`.
+2. Set `/wemc approval ask` to review generated commands, or `/wemc approval approve` to send validated commands automatically.
+3. Run `/wemc chat set the world time to noon`.
+4. Confirm the response contains `time set noon` in a `wemc-commands` block.
+5. In approval mode, inspect with `/wemc agent commands`, then execute with `/wemc agent run`.
+
+Only command families listed by `/wemc agent commands` can be sent. A normal chat response without a `wemc-commands` block is never executed. A batch is capped at 100 commands; larger work must be planned as a separate flow rather than automatically over-executed.
+
 ## License
 
 This template is available under the CC0 license. Feel free to learn from it and incorporate it in your own projects.

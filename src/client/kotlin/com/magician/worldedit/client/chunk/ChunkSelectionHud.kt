@@ -42,9 +42,9 @@ object ChunkSelectionHud {
     }
 
     private fun contextHint(state: ChunkSelectionState, hasDraft: Boolean): String = when {
-        hasDraft -> "RMB confirm  ·  Del cancel"
-        state.selectionMode == ChunkSelectionMode.CORNER -> "Ctrl+LMB start  ·  wheel move"
-        else -> "Ctrl+LMB target  ·  RMB confirm"
+        hasDraft -> "RMB confirm  ·  Del draft  ·  Ctrl+Shift+Del all"
+        state.selectionMode == ChunkSelectionMode.CORNER -> "Ctrl+LMB start  ·  wheel move  ·  Ctrl+Shift/Alt Y"
+        else -> "Ctrl+LMB target  ·  RMB confirm  ·  Ctrl+Shift/Alt Y"
     }
 
     private fun operationLabel(operation: SelectionOperationMode): String = when (operation) {

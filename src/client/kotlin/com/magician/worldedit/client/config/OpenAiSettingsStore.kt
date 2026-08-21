@@ -57,7 +57,7 @@ data class OpenAiSettings(
 
 object OpenAiSettingsStore {
 	const val DEFAULT_BASE_URL = "https://api.openai.com/v1"
-	const val WIRE_API = "responses"
+	const val WIRE_API = "chat/completions"
 	const val DEFAULT_OLLAMA_BASE_URL = "http://127.0.0.1"
 	const val DEFAULT_OLLAMA_PORT = 11434
 	const val DEFAULT_CLAUDE_BASE_URL = "https://api.anthropic.com/v1"
