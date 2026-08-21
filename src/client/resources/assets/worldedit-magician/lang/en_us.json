@@ -30,5 +30,19 @@
   "screen.worldedit-magician.agent.model_picker": "Select a Model",
   "screen.worldedit-magician.agent.loading_models": "Loading available models...",
   "key.worldedit-magician.openai_settings": "OpenAI settings",
-  "key.category.worldedit-magician.general": "WorldEdit Magician"
+  "key.worldedit-magician.selection_operation": "Chunk Selection Mode (Ctrl+C)",
+  "key.worldedit-magician.selection_shape": "Chunk Selection Shape (Ctrl+V)",
+  "key.worldedit-magician.selection_cancel": "Cancel Chunk Selection (Delete)",
+  "key.worldedit-magician.chunk_selection.settime": "Set Time",
+  "key.category.worldedit-magician.general": "WorldEdit Magician",
+  "key.category.worldedit-magician.worldedit": "WorldEdit",
+  "command.worldedit-magician.settime.description": "Set the world time to a specific value",
+  "command.worldedit-magician.settime.arguments.time": "Time value (number 0-24000 or keyword: day/night/noon/midnight/sunrise)",
+  "command.worldedit-magician.undo.description": "Undo the last command",
+  "command.worldedit-magician.redo.description": "Redo the last undone command",
+  "command.worldedit-magician.history.description": "Show command history",
+  "command.worldedit-magician.history.clear.description": "Clear command history",
+  "command.worldedit-magician.destroyEntity.description": "Destroy entities in range",
+  "command.worldedit-magician.destroyEntity.arguments.range": "Range in blocks",
+  "command.worldedit-magician.restoreEntities.description": "Restore destroyed entities"
 }

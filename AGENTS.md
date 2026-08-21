@@ -13,3 +13,11 @@ This should be a plugin that full developed by Agent
 - An asynchronously loaded UI result must be applied only to the current draft state; do not reopen a screen from the stale snapshot captured before the request started, because that discards concurrent player edits.
 - Do not label a loaded dependency as compatible solely because its mod ID is present. Inspect its declared Minecraft version constraint, or state that only loader compatibility has been confirmed.
 - Whenever an implementation mistake is identified, record the cause and the preventative rule in this file before completing the task.
+- A malformed nested KDoc comment can comment out declarations and surface as unrelated unresolved references. Keep KDoc delimiters balanced, and compile the owning source file immediately after editing documentation around declarations.
+- Chunk block estimates must include the full 16x16 horizontal footprint as well as the configured Y range; counting only Y levels underreports the operated volume by a factor of 256.
+- Fabric interaction callbacks pass an `ItemStack` for the held item. Keep helpers aligned with the callback type, then inspect the stack's `item` when matching a tool.
+- Official Mojang mappings use `Player`, not `PlayerEntity`; in this target `Level.getEntities` requires an entity to exclude before the bounds and predicate.
+- Do not declare a `setX` function beside a mutable Kotlin property named `x`; both emit the same JVM setter signature. Use a distinct verb such as `changeX` when state-transition behavior is required.
+- `KeyMapping.Category.register` rejects duplicate identifiers during class initialization. Register each category once and reuse the returned category object for every keybinding in it.
+- In Minecraft 1.21.11, `LevelRenderer.collectPerFrameGizmos()` installs the per-frame collector by calling `Gizmos.withCollector()` before returning. Emit custom gizmos from a `RETURN` injection while that temporary collection is still open; a `HEAD` injection runs before collector installation and crashes as soon as any gizmo is submitted.
+- World-changing commands must be sent through the active server connection after whitelist validation; do not mutate client `Level` state through reflection, and never claim a server command is reversible without a server-side rollback mechanism.

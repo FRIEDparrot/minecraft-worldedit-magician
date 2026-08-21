@@ -3,6 +3,7 @@ package com.magician.worldedit.client.config
 import com.google.gson.JsonArray
 import com.google.gson.JsonObject
 import com.google.gson.JsonParser
+import com.magician.worldedit.client.command.MinecraftCommandWhitelist
 import java.net.URI
 import java.net.http.HttpClient
 import java.net.http.HttpRequest
@@ -21,13 +22,14 @@ object AiChatClient {
 
 	fun send(settings: OpenAiSettings, prompt: String): CompletableFuture<AiChatResult> {
 		if (prompt.isBlank()) return CompletableFuture.completedFuture(AiChatResult.Failure("Enter a prompt."))
+		val contextualPrompt = "${MinecraftCommandWhitelist.contextForAgent()}\n\nPlayer request:\n${prompt.trim()}"
 		return runCatching<CompletableFuture<AiChatResult>> {
 			when (settings.selectedProvider) {
-				AiProvider.OPENAI -> openAi(settings, prompt)
-				AiProvider.OLLAMA -> ollama(settings, prompt)
-				AiProvider.CLAUDE -> claude(settings, prompt)
-				AiProvider.GEMINI -> gemini(settings, prompt)
-				AiProvider.DEEPSEEK -> deepSeek(settings, prompt)
+				AiProvider.OPENAI -> openAi(settings, contextualPrompt)
+				AiProvider.OLLAMA -> ollama(settings, contextualPrompt)
+				AiProvider.CLAUDE -> claude(settings, contextualPrompt)
+				AiProvider.GEMINI -> gemini(settings, contextualPrompt)
+				AiProvider.DEEPSEEK -> deepSeek(settings, contextualPrompt)
 				AiProvider.COPILOT -> CompletableFuture.completedFuture(AiChatResult.Failure("GitHub Copilot chat requires a supported OAuth integration or compatible gateway."))
 			}
 		}.getOrElse { exception -> AiChatResult.Failure(exception.message ?: "Enter a valid provider URL.").asFuture() }

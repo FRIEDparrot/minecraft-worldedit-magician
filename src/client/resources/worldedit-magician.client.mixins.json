@@ -3,7 +3,9 @@
 	"package": "com.magician.worldedit.client.mixin",
 	"compatibilityLevel": "JAVA_21",
 	"client": [
-		"ExampleClientMixin"
+		"ExampleClientMixin",
+		"ChunkSelectionMouseMixin",
+		"ChunkSelectionWorldRenderMixin"
 	],
 	"injectors": {
 		"defaultRequire": 1
