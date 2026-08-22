@@ -8,11 +8,14 @@ import com.magician.worldedit.client.chunk.ChunkSelectionStageResult
 import com.magician.worldedit.client.chunk.ChunkSelectionState
 import com.magician.worldedit.client.chunk.ChunkSelectionWorldRenderer
 import com.magician.worldedit.client.chunk.SelectionOperationMode
-import com.magician.worldedit.client.command.AgentCommandList
-import com.magician.worldedit.client.command.CommandHistory
-import com.magician.worldedit.client.command.EntityCommandHandler
+import com.magician.worldedit.client.command.AgentFlowAction
+import com.magician.worldedit.client.command.AgentFlowController
+import com.magician.worldedit.client.command.AgentOperationMode
+import com.magician.worldedit.client.command.AgentOperationSettings
+import com.magician.worldedit.client.command.AgentOperationSettingsStore
+import com.magician.worldedit.client.command.AgentResponsePresentation
 import com.magician.worldedit.client.command.MinecraftCommandExecutor
-import com.magician.worldedit.client.command.TimeCommandHandler
+import com.magician.worldedit.client.command.MinecraftCommandWhitelist
 import com.magician.worldedit.client.config.AiModelCatalog
 import com.magician.worldedit.client.config.AiProvider
 import com.magician.worldedit.client.config.AiChatClient
@@ -22,7 +25,7 @@ import com.magician.worldedit.client.config.ModelCatalogResult
 import com.magician.worldedit.client.config.OpenAiSettings
 import com.magician.worldedit.client.config.OpenAiSettingsStore
 import com.magician.worldedit.client.config.WorldEditInstallationChecker
-import com.magician.worldedit.client.screen.OpenAiSettingsScreen
+import com.magician.worldedit.client.screen.ConfigurationScreen
 import com.magician.worldedit.client.screen.WorldEditConfigurationScreen
 import com.mojang.brigadier.Command
 import com.mojang.brigadier.arguments.StringArgumentType
@@ -33,6 +36,7 @@ import net.fabricmc.fabric.api.client.command.v2.ClientCommandManager.argument
 import net.fabricmc.fabric.api.client.command.v2.ClientCommandManager.literal
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents
 import net.fabricmc.fabric.api.client.keybinding.v1.KeyBindingHelper
+import net.fabricmc.fabric.api.client.message.v1.ClientReceiveMessageEvents
 import net.fabricmc.fabric.api.event.player.AttackBlockCallback
 import net.fabricmc.fabric.api.event.player.UseBlockCallback
 import net.fabricmc.fabric.api.event.player.UseItemCallback
@@ -46,6 +50,7 @@ import net.minecraft.core.Direction
 import org.lwjgl.glfw.GLFW
 
 object WorldeditMagicianClient : ClientModInitializer {
+    private var activeFlow: ActiveFlow? = null
     private val generalCategory = KeyMapping.Category.register(WorldeditMagician.id("general"))
     private val worldeditCategory = KeyMapping.Category.register(WorldeditMagician.id("worldedit"))
 
@@ -92,9 +97,19 @@ object WorldeditMagicianClient : ClientModInitializer {
             dispatcher.register(
                 literal("worldeditmagician")
                     .then(literal("config").executes { openAgentSettingsScreen(); Command.SINGLE_SUCCESS })
-                    .then(literal("openai").executes { openAgentSettingsScreen(); Command.SINGLE_SUCCESS })
                     .then(literal("worldedit").executes { openWorldEditSettingsScreen(); Command.SINGLE_SUCCESS }),
             )
+        }
+
+        ClientReceiveMessageEvents.GAME.register { message, _ ->
+            handleFlowGameMessage(message.string)
+        }
+
+        ClientTickEvents.END_CLIENT_TICK.register {
+            activeFlow?.let { flow ->
+                val action = flow.controller.timeoutIfDue(System.currentTimeMillis())
+                if (action !is AgentFlowAction.Noop) handleFlowAction(flow, action)
+            }
         }
 
         ClientTickEvents.END_CLIENT_TICK.register {
@@ -174,6 +189,27 @@ object WorldeditMagicianClient : ClientModInitializer {
         .then(literal("config").executes { openAgentSettingsScreen(); Command.SINGLE_SUCCESS })
         .then(literal("status").executes { showStatus(); Command.SINGLE_SUCCESS })
         .then(
+            literal("query")
+                .then(literal("time").executes {
+                    sendMessage("Vanilla time query syntax: /time query <daytime|gametime|day>. Use /wemc command list to see agent-enabled commands.")
+                    Command.SINGLE_SUCCESS
+                })
+                .then(literal("entity").executes {
+                    sendMessage("Vanilla Java Edition has no /entity query command. Use /data get entity <single-target> [path] through an enabled Query command.")
+                    Command.SINGLE_SUCCESS
+                }),
+        )
+        .then(
+            literal("command")
+                .then(literal("list").executes { listAvailableCommands(1); Command.SINGLE_SUCCESS })
+                .then(literal("list").then(argument("page", StringArgumentType.word()).executes { context ->
+                    val page = StringArgumentType.getString(context, "page").toIntOrNull() ?: 1
+                    listAvailableCommands(page)
+                    Command.SINGLE_SUCCESS
+                }))
+                .then(literal("history").executes { listExecutedCommands(); Command.SINGLE_SUCCESS }),
+        )
+        .then(
             literal("provider")
                 .then(literal("list").executes { listProviders(); Command.SINGLE_SUCCESS })
                 .then(literal("use").then(argument("provider", StringArgumentType.word()).executes { context ->
@@ -194,70 +230,24 @@ object WorldeditMagicianClient : ClientModInitializer {
             Command.SINGLE_SUCCESS
         }))
         .then(
+            literal("operation")
+                .then(literal("single").executes { setOperationMode(AgentOperationMode.SINGLE); Command.SINGLE_SUCCESS })
+                .then(literal("flow").executes { setOperationMode(AgentOperationMode.FLOW); Command.SINGLE_SUCCESS })
+                .then(literal("status").executes { showOperationStatus(); Command.SINGLE_SUCCESS }),
+        )
+        .then(
+            literal("flow")
+                .then(literal("approve").executes { approveFlowQuery(); Command.SINGLE_SUCCESS })
+                .then(literal("cancel").executes { cancelFlow(); Command.SINGLE_SUCCESS })
+                .then(literal("status").executes { showFlowStatus(); Command.SINGLE_SUCCESS }),
+        )
+        .then(
             literal("approval")
                 .then(literal("ask").executes { setApproval(ApprovalMode.ASK); Command.SINGLE_SUCCESS })
                 .then(literal("approve").executes { setApproval(ApprovalMode.APPROVE); Command.SINGLE_SUCCESS }),
         )
         .then(
-            literal("run")
-                .then(literal("settime").then(argument("time", StringArgumentType.greedyString()).executes { context ->
-                      val timeValue = StringArgumentType.getString(context, "time")
-                      val success = TimeCommandHandler.execute(timeValue)
-                      if (!success) {
-                          sendMessage("Failed to set time. Use a number 0-24000 or day, night, noon, or midnight.")
-                    }
-                    Command.SINGLE_SUCCESS
-                }))
-                .then(literal("undo").executes {
-                    if (TimeCommandHandler.undo()) Command.SINGLE_SUCCESS
-                    else {
-                        sendMessage("Nothing to undo.")
-                        Command.SINGLE_SUCCESS
-                    }
-                })
-                .then(literal("redo").executes {
-                    if (TimeCommandHandler.redo()) Command.SINGLE_SUCCESS
-                    else {
-                        sendMessage("Nothing to redo.")
-                        Command.SINGLE_SUCCESS
-                    }
-                })
-                .then(literal("history").executes {
-                    val commands = CommandHistory.appliedCommandsList()
-                    if (commands.isEmpty()) {
-                        sendMessage("No commands in history.")
-                    } else {
-                        commands.forEach { cmd ->
-                            sendMessage("${cmd.command} — ${cmd.description}")
-                        }
-                    }
-                    sendMessage("Undo count: ${CommandHistory.undoCount}, Redo count: ${CommandHistory.redoCount}")
-                    Command.SINGLE_SUCCESS
-                })
-                .then(literal("history").then(literal("clear").executes {
-                    CommandHistory.clear()
-                    sendMessage("Command history cleared.")
-                    Command.SINGLE_SUCCESS
-                }))
-                .then(literal("destroyEntity").then(argument("range", StringArgumentType.greedyString()).executes { context ->
-                    val rangeStr = StringArgumentType.getString(context, "range")
-                    EntityCommandHandler.destroyEntities(rangeStr)
-                    Command.SINGLE_SUCCESS
-                }))
-                .then(literal("restoreEntities").executes {
-                    if (EntityCommandHandler.undo()) Command.SINGLE_SUCCESS
-                    else {
-                        sendMessage("Nothing to restore.")
-                        Command.SINGLE_SUCCESS
-                    }
-                })
-                .then(literal("redoEntities").executes {
-                    if (EntityCommandHandler.redo()) Command.SINGLE_SUCCESS
-                    else {
-                        sendMessage("Nothing to redo.")
-                        Command.SINGLE_SUCCESS
-                    }
-                }),
+            literal("run"),
         )
         // Debug/info commands for agent context
         .then(
@@ -271,19 +261,7 @@ object WorldeditMagicianClient : ClientModInitializer {
                     Command.SINGLE_SUCCESS
                 })
                 .then(literal("commands").executes {
-                    // Print the full agent command list for reference
-                    val commands = AgentCommandList.getAllCommands()
-                    sendMessage("Available commands (${commands.size}):")
-                    commands.forEach { cmd ->
-                        val undoable = if (cmd.isUndoable) " [undoable]" else ""
-                        sendMessage("  ${cmd.command}${undoable}")
-                        cmd.arguments.forEach { arg ->
-                            sendMessage("    $arg.name: $arg.description ($arg.type${if (arg.required) ", required" else ", optional"})")
-                        }
-                        cmd.examples.forEach { example ->
-                            sendMessage("    Example: $example")
-                        }
-                    }
+                    listAvailableCommands(1)
                     val pending = MinecraftCommandExecutor.pendingCommands()
                     if (pending.isNotEmpty()) {
                         sendMessage("Pending agent sequence (${pending.size}):")
@@ -293,9 +271,45 @@ object WorldeditMagicianClient : ClientModInitializer {
                 })
         )
 
-    private fun openAgentSettingsScreen() {
+    private fun listAvailableCommands(requestedPage: Int) {
+        val commands = MinecraftCommandWhitelist.availableDefinitions()
+        val disabled = MinecraftCommandWhitelist.disabledCategories()
+        val pageSize = 10
+        val pageCount = maxOf(1, (commands.size + pageSize - 1) / pageSize)
+        val page = requestedPage.coerceIn(1, pageCount)
+        val fromIndex = (page - 1) * pageSize
+        val pageCommands = commands.drop(fromIndex).take(pageSize)
+
+        sendMessage("WEMC commands — page $page/$pageCount (${commands.size} enabled):")
+        pageCommands.forEachIndexed { index, command ->
+            sendMessage("${fromIndex + index + 1}. [${command.category.displayName}] /${command.syntax}")
+            sendMessage("   ${command.description}")
+        }
+        if (page < pageCount) sendMessage("Next page: /wemc command list ${page + 1}")
+        if (disabled.isNotEmpty()) {
+            sendMessage("Stripped from agent context and execution: ${disabled.joinToString { it.displayName }}. Enable them in Config → Agent Command Permissions.")
+        }
+    }
+
+    private fun listExecutedCommands() {
+        val history = MinecraftCommandExecutor.executionHistory()
+        if (history.isEmpty()) {
+            sendMessage("No WEMC commands have been sent this session.")
+            return
+        }
+        sendMessage("WEMC command history (${history.size}, newest first):")
+        history.forEachIndexed { index, entry ->
+            sendMessage("${index + 1}. /${entry.command} — sent to server")
+        }
+    }
+
+    private fun openConfigurationScreen() {
         val minecraft = Minecraft.getInstance()
-        minecraft.setScreen(OpenAiSettingsScreen(minecraft.screen))
+        minecraft.setScreen(ConfigurationScreen(minecraft.screen))
+    }
+
+    private fun openAgentSettingsScreen() {
+        openConfigurationScreen()
     }
 
     private fun openWorldEditSettingsScreen() {
@@ -349,19 +363,122 @@ object WorldeditMagicianClient : ClientModInitializer {
 
     private fun sendPrompt(prompt: String) {
         val settings = OpenAiSettingsStore.load()
+        val operation = AgentOperationSettingsStore.load()
+        if (operation.mode == AgentOperationMode.FLOW && activeFlow != null) {
+            sendMessage("A flow is already active. Use /wemc flow approve, /wemc flow status, or /wemc flow cancel.")
+            return
+        }
+        if (operation.mode == AgentOperationMode.FLOW) {
+            val flow = ActiveFlow(prompt, settings, AgentFlowController(operation))
+            activeFlow = flow
+            flow.controller.start()
+            sendFlowRequest(flow, prompt)
+        } else {
+            sendSinglePrompt(settings, prompt)
+        }
+    }
+
+    private fun sendSinglePrompt(settings: OpenAiSettings, prompt: String) {
         sendMessage("Sending message to ${providerId(settings.selectedProvider)}...")
         AiChatClient.send(settings, prompt).thenAccept { result ->
             Minecraft.getInstance().execute {
                 when (result) {
-                    is AiChatResult.Success -> {
-                        result.answer.chunked(240).forEach { sendMessage(it) }
-                        MinecraftCommandExecutor.submitAgentResponse(result.answer, settings.approvalMode)?.let(::sendMessage)
-                    }
+                    is AiChatResult.Success -> displayAndSubmitAgentAnswer(result.answer, settings.approvalMode)
                     is AiChatResult.Failure -> sendMessage(result.message)
                 }
             }
         }
     }
+
+    private fun sendFlowRequest(flow: ActiveFlow, prompt: String) {
+        sendMessage("Flow: requesting step from ${providerId(flow.settings.selectedProvider)}...")
+        AiChatClient.send(flow.settings, prompt).thenAccept { result ->
+            Minecraft.getInstance().execute {
+                if (activeFlow !== flow) return@execute
+                when (result) {
+                    is AiChatResult.Success -> handleFlowAction(flow, flow.controller.onAgentResponse(result.answer))
+                    is AiChatResult.Failure -> finishFlow(flow, result.message)
+                }
+            }
+        }
+    }
+
+    private fun displayAndSubmitAgentAnswer(answer: String, approvalMode: ApprovalMode) {
+        AgentResponsePresentation.displayText(answer)
+            .takeIf(String::isNotBlank)
+            ?.chunked(240)
+            ?.forEach(::sendMessage)
+        MinecraftCommandExecutor.submitAgentResponse(answer, approvalMode)?.let(::sendMessage)
+    }
+
+    private fun handleFlowGameMessage(message: String) {
+        val flow = activeFlow ?: return
+        handleFlowAction(flow, flow.controller.onServerGameMessage(message))
+    }
+
+    private fun handleFlowAction(flow: ActiveFlow, action: AgentFlowAction) {
+        if (activeFlow !== flow || action is AgentFlowAction.Noop) return
+        when (action) {
+            AgentFlowAction.AwaitQueryApproval -> sendMessage("Flow requests self-position query /tp @s ~ ~ ~. Use /wemc flow approve or /wemc flow cancel.")
+            AgentFlowAction.SendSelfPositionProbe -> {
+                val connection = Minecraft.getInstance().player?.connection
+                if (connection == null) finishFlow(flow, "Flow stopped: no active player connection.")
+                else {
+                    connection.sendCommand("tp @s ~ ~ ~")
+                    sendMessage("Flow sent self-position query; waiting for server feedback.")
+                }
+            }
+            is AgentFlowAction.RequestContinuation -> sendFlowRequest(flow, "${flow.originalPrompt}\n\n${action.context}\n\nContinue the task using this confirmed result. If no more query is needed, provide the final answer and optional wemc-commands block.")
+            is AgentFlowAction.FinalAnswer -> {
+                displayAndSubmitAgentAnswer(action.answer, flow.settings.approvalMode)
+                finishFlow(flow, null)
+            }
+            is AgentFlowAction.Failed -> finishFlow(flow, action.message)
+            AgentFlowAction.Noop -> Unit
+        }
+    }
+
+    private fun approveFlowQuery() {
+        val flow = activeFlow ?: run {
+            sendMessage("No flow is awaiting query approval.")
+            return
+        }
+        handleFlowAction(flow, flow.controller.approveQuery(System.currentTimeMillis()))
+    }
+
+    private fun cancelFlow() {
+        if (activeFlow == null) sendMessage("No active flow.")
+        else finishFlow(activeFlow!!, "Flow cancelled.")
+    }
+
+    private fun showFlowStatus() {
+        if (activeFlow == null) sendMessage("No active flow.")
+        else sendMessage("A flow is active. Use /wemc flow approve when it requests the self-position query, or /wemc flow cancel.")
+    }
+
+    private fun setOperationMode(mode: AgentOperationMode) {
+        val settings = AgentOperationSettingsStore.load().copy(mode = mode).normalized()
+        AgentOperationSettingsStore.save(settings)
+        if (mode == AgentOperationMode.SINGLE && activeFlow != null) finishFlow(activeFlow!!, "Flow stopped because operation mode changed to Single.")
+        sendMessage("Agent operation mode: ${if (mode == AgentOperationMode.SINGLE) "Single" else "Flow"}.")
+    }
+
+    private fun showOperationStatus() {
+        val settings = AgentOperationSettingsStore.load()
+        sendMessage("Operation: ${if (settings.mode == AgentOperationMode.SINGLE) "Single" else "Flow"}; max AI requests ${settings.maxAiRequests}; max server queries ${settings.maxServerSteps}; self-position query ${if (settings.allowSelfPositionQuery) "enabled" else "disabled"}.")
+    }
+
+    private fun finishFlow(flow: ActiveFlow?, message: String?) {
+        if (flow != null && activeFlow !== flow) return
+        activeFlow = null
+        message?.let(::sendMessage)
+    }
+
+    private data class ActiveFlow(
+        val originalPrompt: String,
+        val settings: OpenAiSettings,
+        val controller: AgentFlowController,
+    )
 
     private fun selectModel(qualifiedModel: String) {
         val separator = qualifiedModel.indexOf(':')

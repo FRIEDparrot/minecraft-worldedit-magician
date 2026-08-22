@@ -8,48 +8,154 @@ sealed interface CommandSequenceValidation {
 }
 
 /**
- * The complete set of vanilla commands WEMC may send to a server.
+ * Permission categories for the curated vanilla Java Edition command families
+ * which WEMC can expose to its agent.
+ */
+enum class MinecraftCommandCategory(
+    val displayName: String,
+    val description: String,
+) {
+    QUERY("Query", "Read-only information about time, entities, blocks, and inventories."),
+    WORLD_STATE("World state", "Changes time, weather, and game-rule state."),
+    INVENTORY("Inventory", "Gives, clears, or otherwise changes player inventories."),
+    WORLD_EDIT("World edit", "Places, fills, clones, or changes selected blocks and block data."),
+    ENTITY("Entity", "Summons, removes, tags, damages, teleports, or changes entities."),
+    PLAYER("Player state", "Changes effects, experience, gamemode, or other player state."),
+    PRESENTATION("Presentation", "Shows particles, sounds, titles, messages, and similar feedback."),
+}
+
+/**
+ * A single curated vanilla Java Edition command family.
  *
- * This is intentionally a closed list. Commands that compose arbitrary commands
- * (`execute`, `function`, command blocks) and administrative/server lifecycle
- * commands are excluded because they would bypass the policy.
+ * The wikiSource is deliberately retained with the manifest so additions remain
+ * traceable to the required Minecraft Wiki research step.
+ */
+data class MinecraftCommandDefinition(
+    val root: String,
+    val category: MinecraftCommandCategory,
+    val syntax: String,
+    val description: String,
+    val example: String,
+    val wikiSource: String,
+    val validator: (List<String>) -> String?,
+) {
+    fun asAgentInfo(): AgentCommandInfo = AgentCommandInfo(
+        command = "/$syntax",
+        description = description,
+        isUndoable = false,
+        examples = listOf(example),
+    )
+}
+
+/**
+ * Closed, category-aware allow-list of vanilla Minecraft Java Edition commands.
+ *
+ * Every definition is backed by the Minecraft Wiki and is filtered by the
+ * player's configured command-category permissions before reaching the agent.
  */
 object MinecraftCommandWhitelist {
     const val MAX_SEQUENCE_LENGTH = 100
+    private const val TIME_WIKI = "https://minecraft.wiki/w/Commands/time"
+    private const val DATA_WIKI = "https://minecraft.wiki/w/Commands/data"
+    private const val CLEAR_WIKI = "https://minecraft.wiki/w/Commands/clear"
+    private const val COMMANDS_WIKI = "https://minecraft.wiki/w/Commands"
 
-    val agentCommands: List<AgentCommandInfo> = listOf(
-        command("/time set <day|night|noon|midnight|ticks>", "Set the world time. This operation is not reversible.", "time set noon"),
-        command("/weather <clear|rain|thunder> [duration]", "Set weather for the world.", "weather clear"),
-        command("/setblock <x> <y> <z> <block> [mode] [nbt]", "Place or replace one block, optionally with block-entity NBT.", "setblock 10 64 10 minecraft:stone"),
-        command("/fill <from> <to> <block> [mode] [filter]", "Fill a cuboid with a block state.", "fill 0 64 0 15 64 15 minecraft:stone"),
-        command("/clone <from> <to> <destination> [mask] [mode]", "Copy a cuboid to another location.", "clone 0 64 0 15 80 15 32 64 32"),
-        command("/summon <entity> [position] [nbt]", "Spawn an entity, optionally with NBT.", "summon minecraft:armor_stand ~ ~ ~"),
-        command("/kill [targets]", "Remove matching entities.", "kill @e[type=minecraft:zombie,distance=..16]"),
-        command("/data <get|merge|modify|remove> <entity|block|storage> ...", "Read or edit entity, block, or storage NBT.", "data merge block 10 64 10 {CustomName:'{\"text\":\"WEMC\"}'}"),
-        command("/item <replace|modify> ...", "Replace or modify inventory and container item stacks.", "item replace block 10 64 10 container.0 with minecraft:stone"),
-        command("/effect <give|clear> ...", "Apply or clear status effects.", "effect give @e[type=minecraft:zombie,distance=..16] minecraft:glowing 30"),
-        command("/experience <add|set> <targets> <amount> [levels|points]", "Set or add player experience.", "experience add @s 5 levels"),
-        command("/particle <particle> [position] [delta] [speed] [count] [force|normal] [viewers]", "Display particles.", "particle minecraft:happy_villager ~ ~1 ~ 0.3 0.3 0.3 0.01 8"),
-        command("/playsound <sound> <source> <targets> [position] [volume] [pitch]", "Play a sound for selected players.", "playsound minecraft:block.note_block.pling master @s"),
+    private val definitions: List<MinecraftCommandDefinition> = listOf(
+        definition("time", MinecraftCommandCategory.QUERY, "time query <daytime|gametime|day>", "Query the world daytime, total game time, or day count.", "time query daytime", TIME_WIKI) { tokens ->
+            if (tokens.size == 3 && tokens[1].equals("query", true) && tokens[2].lowercase() in TIME_QUERY_VALUES) null
+            else "must use: time query <daytime|gametime|day>."
+        },
+        definition("data", MinecraftCommandCategory.QUERY, "data get <entity|block|storage> <target> [path] [scale]", "Read NBT data. Entity lookups require exactly one target selector, player name, or UUID.", "data get entity @s", DATA_WIKI) { tokens ->
+            if (tokens.size >= 4 && tokens[1].equals("get", true) && tokens[2].lowercase() in DATA_TARGETS) null
+            else "must use: data get <entity|block|storage> <target> [path] [scale]."
+        },
+        definition("clear", MinecraftCommandCategory.QUERY, "clear [targets] [item] 0", "Query how many matching inventory items a player has without clearing them (maxCount 0).", "clear @s minecraft:diamond 0", CLEAR_WIKI) { tokens ->
+            if (tokens.lastOrNull() == "0" && tokens.size in 2..4) null
+            else "read-only clear queries must end with maxCount 0; use the Inventory category to permit clearing items."
+        },
+        definition("time", MinecraftCommandCategory.WORLD_STATE, "time set <time|day|night|noon|midnight>", "Set the world daylight-cycle time.", "time set noon", TIME_WIKI) { tokens ->
+            if (tokens.size == 3 && tokens[1].equals("set", true) && isTimeValue(tokens[2])) null
+            else "must use: time set <time|day|night|noon|midnight>."
+        },
+        definition("time", MinecraftCommandCategory.WORLD_STATE, "time add <time>", "Add a non-negative time value to the daylight cycle.", "time add 1200t", TIME_WIKI) { tokens ->
+            if (tokens.size == 3 && tokens[1].equals("add", true) && isDurationValue(tokens[2])) null
+            else "must use: time add <non-negative time>."
+        },
+        definition("weather", MinecraftCommandCategory.WORLD_STATE, "weather <clear|rain|thunder> [duration]", "Set world weather, optionally for a duration.", "weather clear", COMMANDS_WIKI) { tokens ->
+            if (tokens.size in 2..3 && tokens[1].lowercase() in WEATHER) null else "must use: weather <clear|rain|thunder> [duration]."
+        },
+        definition("give", MinecraftCommandCategory.INVENTORY, "give <targets> <item> [count]", "Give item stacks to one or more players.", "give @s minecraft:stone 64", COMMANDS_WIKI) { tokens ->
+            if (tokens.size in 3..4) null else "requires targets, item, and optional count."
+        },
+        definition("clear", MinecraftCommandCategory.INVENTORY, "clear [targets] [item] [maxCount]", "Clear matching items from player inventories.", "clear @s minecraft:cobblestone", CLEAR_WIKI) { tokens ->
+            if (tokens.size in 1..4 && tokens.lastOrNull() != "0") null else "use a clearing form of clear; a maxCount of 0 belongs to the Query category."
+        },
+        definition("item", MinecraftCommandCategory.INVENTORY, "item <replace|modify> <entity|block> ...", "Replace or modify inventory and container item stacks.", "item replace entity @s hotbar.0 with minecraft:stone", COMMANDS_WIKI) { tokens ->
+            if (tokens.size >= 4 && tokens[1].lowercase() in ITEM_OPERATIONS && tokens[2].lowercase() in DATA_TARGETS.take(2)) null
+            else "must use item replace or item modify targeting entity or block."
+        },
+        definition("setblock", MinecraftCommandCategory.WORLD_EDIT, "setblock <x> <y> <z> <block> [mode]", "Place or replace one block in the confirmed chunk selection.", "setblock ~ ~ ~ minecraft:stone", COMMANDS_WIKI) { tokens ->
+            if (tokens.size >= 5) null else "requires x y z and a block."
+        },
+        definition("fill", MinecraftCommandCategory.WORLD_EDIT, "fill <from> <to> <block> [mode]", "Fill a cuboid in the confirmed chunk selection.", "fill 0 64 0 15 64 15 minecraft:stone", COMMANDS_WIKI) { tokens ->
+            if (tokens.size >= 8) null else "requires two positions and a block."
+        },
+        definition("clone", MinecraftCommandCategory.WORLD_EDIT, "clone <from> <to> <destination> [mask] [mode]", "Copy a cuboid into the confirmed chunk selection.", "clone 0 64 0 15 80 15 32 64 32", COMMANDS_WIKI) { tokens ->
+            if (tokens.size >= 10) null else "requires source bounds and a destination."
+        },
+        definition("data", MinecraftCommandCategory.WORLD_EDIT, "data <merge|modify|remove> <block|storage> ...", "Modify block-entity or command-storage NBT. Block targets must be in the confirmed selection.", "data merge block ~ ~ ~ {CustomName:'{\"text\":\"WEMC\"}'}", DATA_WIKI) { tokens ->
+            if (tokens.size >= 4 && tokens[1].lowercase() in DATA_MUTATIONS && tokens[2].lowercase() in setOf("block", "storage")) null
+            else "must use data <merge|modify|remove> <block|storage> ..."
+        },
+        definition("summon", MinecraftCommandCategory.ENTITY, "summon <entity> [position] [nbt]", "Spawn an entity.", "summon minecraft:armor_stand ~ ~ ~", COMMANDS_WIKI) { tokens ->
+            if (tokens.size >= 2) null else "requires an entity type."
+        },
+        definition("kill", MinecraftCommandCategory.ENTITY, "kill [targets]", "Remove matching entities.", "kill @e[type=minecraft:zombie,distance=..16]", COMMANDS_WIKI) { null },
+        definition("tag", MinecraftCommandCategory.ENTITY, "tag <targets> <add|remove> <name>", "Add or remove scoreboard tags from entities.", "tag @e[type=minecraft:zombie,distance=..16] add wemc_target", COMMANDS_WIKI) { tokens ->
+            if (tokens.size == 4 && tokens[2].lowercase() in setOf("add", "remove")) null else "must use tag <targets> <add|remove> <name>."
+        },
+        definition("effect", MinecraftCommandCategory.PLAYER, "effect <give|clear> <targets> ...", "Apply or clear status effects.", "effect give @s minecraft:night_vision 60", COMMANDS_WIKI) { tokens ->
+            if (tokens.size >= 3 && tokens[1].lowercase() in EFFECT_OPERATIONS) null else "must use effect <give|clear> <targets> ..."
+        },
+        definition("experience", MinecraftCommandCategory.PLAYER, "experience <add|set> <targets> <amount> [levels|points]", "Set or add player experience.", "experience add @s 5 levels", COMMANDS_WIKI) { tokens ->
+            if (tokens.size >= 4 && tokens[1].lowercase() in EXPERIENCE_OPERATIONS) null else "must use experience <add|set> <targets> <amount>."
+        },
+        definition("gamemode", MinecraftCommandCategory.PLAYER, "gamemode <mode> [targets]", "Change player game mode.", "gamemode creative @s", COMMANDS_WIKI) { tokens ->
+            if (tokens.size in 2..3 && tokens[1].lowercase() in GAMEMODES) null else "must use gamemode <survival|creative|adventure|spectator> [targets]."
+        },
+        definition("particle", MinecraftCommandCategory.PRESENTATION, "particle <particle> [position] [delta] [speed] [count] [force|normal] [viewers]", "Display a particle effect.", "particle minecraft:happy_villager ~ ~1 ~ 0.3 0.3 0.3 0.01 8", COMMANDS_WIKI) { tokens ->
+            if (tokens.size >= 2) null else "requires a particle type."
+        },
+        definition("playsound", MinecraftCommandCategory.PRESENTATION, "playsound <sound> <source> <targets> [position] [volume] [pitch]", "Play a sound for selected players.", "playsound minecraft:block.note_block.pling master @s", COMMANDS_WIKI) { tokens ->
+            if (tokens.size >= 4) null else "requires sound, source, and targets."
+        },
+        definition("title", MinecraftCommandCategory.PRESENTATION, "title <targets> <title|subtitle|actionbar> <text>", "Display a title, subtitle, or actionbar message.", "title @s actionbar {\"text\":\"Ready\"}", COMMANDS_WIKI) { tokens ->
+            if (tokens.size >= 4 && tokens[2].lowercase() in TITLE_OPERATIONS) null else "must use title <targets> <title|subtitle|actionbar> <text>."
+        },
     )
 
+    fun availableDefinitions(): List<MinecraftCommandDefinition> = definitions.filter(::isEnabled)
+
+    val agentCommands: List<AgentCommandInfo>
+        get() = availableDefinitions().map(MinecraftCommandDefinition::asAgentInfo)
+
     fun contextForAgent(): String = buildString {
-        appendLine("WEMC can run only the following Minecraft command families. Every operation is non-reversible.")
-        appendLine("Use only numeric coordinates or standard Minecraft relative coordinates. Keep world edits inside the player's selected area and configured Y range.")
-        appendLine("To request execution, put one command per line inside a fenced block tagged wemc-commands. Do not include a leading slash.")
-        appendLine("Commands are queued for player review unless the player enabled automatic approval.")
-        appendLine("Allowed commands:")
-        agentCommands.forEach { command -> appendLine("- ${command.command}: ${command.description}") }
-        appendLine("Never request execute, function, schedule, command blocks, op, deop, ban, whitelist, stop, reload, seed, difficulty, worldborder, teleport, or any command not listed above.")
+        val enabled = availableDefinitions()
+        val disabled = disabledCategories()
+        appendLine("WEMC may send only the following Minecraft Java Edition command forms. Each syntax was checked against Minecraft Wiki before inclusion.")
+        appendLine("Use one command per line inside a fenced block tagged wemc-commands. Do not include a leading slash.")
+        appendLine("World-editing commands must stay within the player-confirmed chunk selection and configured Y range. Commands are queued for review unless automatic approval is enabled.")
+        appendLine("Enabled command families:")
+        enabled.groupBy { it.category }.forEach { (category, commands) ->
+            appendLine("- ${category.displayName}: ${commands.joinToString { "/${it.syntax}" }}")
+        }
+        if (disabled.isNotEmpty()) appendLine("Disabled command categories (do not request them): ${disabled.joinToString { it.displayName }}.")
+        appendLine("Never request arbitrary execute/function/schedule/command-block/admin/server-lifecycle commands. In Flow mode, WEMC alone may issue the fixed self-position probe tp @s ~ ~ ~ after player approval; never request tp or teleport in wemc-commands.")
     }.trim()
 
     fun validateSequence(commands: List<String>): CommandSequenceValidation {
         if (commands.isEmpty()) return CommandSequenceValidation.Invalid("No commands were provided.")
-        if (commands.size > MAX_SEQUENCE_LENGTH) {
-            return CommandSequenceValidation.Invalid(
-                "A sequence may contain at most $MAX_SEQUENCE_LENGTH commands. Use /wemc flow for a planned multi-step operation.",
-            )
-        }
+        if (commands.size > MAX_SEQUENCE_LENGTH) return CommandSequenceValidation.Invalid("A sequence may contain at most $MAX_SEQUENCE_LENGTH commands. Use /wemc flow for a planned multi-step operation.")
 
         val normalized = commands.mapIndexed { index, raw ->
             val command = raw.trim().removePrefix("/")
@@ -68,38 +174,60 @@ object MinecraftCommandWhitelist {
         return validateSequence(commands)
     }
 
-    private fun validateCommand(command: String): String? {
-        val tokens = command.split(WHITESPACE, limit = 12)
-        val root = tokens.firstOrNull()?.lowercase() ?: return "is empty."
-        return when (root) {
-            "time" -> if (tokens.size == 3 && tokens[1].equals("set", true) && isTimeValue(tokens[2])) null else "must use: time set <day|night|noon|midnight|0..24000>."
-            "weather" -> if (tokens.size in 2..3 && tokens[1].lowercase() in WEATHER) null else "must use clear, rain, or thunder."
-            "setblock" -> if (tokens.size >= 5) null else "requires x y z and a block."
-            "fill" -> if (tokens.size >= 8) null else "requires two positions and a block."
-            "clone" -> if (tokens.size >= 10) null else "requires source bounds and a destination."
-            "summon" -> if (tokens.size >= 2) null else "requires an entity type."
-            "kill" -> null
-            "data" -> if (tokens.size >= 3 && tokens[1].lowercase() in DATA_OPERATIONS && tokens[2].lowercase() in DATA_TARGETS) null else "must use data <get|merge|modify|remove> <entity|block|storage> ..."
-            "item" -> if (tokens.size >= 3 && tokens[1].lowercase() in ITEM_OPERATIONS) null else "must use item replace or item modify."
-            "effect" -> if (tokens.size >= 2 && tokens[1].lowercase() in EFFECT_OPERATIONS) null else "must use effect give or effect clear."
-            "experience", "xp" -> if (tokens.size >= 4 && tokens[1].lowercase() in EXPERIENCE_OPERATIONS) null else "must use experience <add|set> <targets> <amount>."
-            "particle" -> if (tokens.size >= 2) null else "requires a particle type."
-            "playsound" -> if (tokens.size >= 4) null else "requires sound, source, and targets."
-            else -> "'$root' is not on the WEMC command whitelist."
-        }
+    fun disabledCategories(): List<MinecraftCommandCategory> = MinecraftCommandCategory.entries.filterNot(::isCategoryEnabled)
+
+    fun isCategoryEnabled(category: MinecraftCommandCategory): Boolean = CommandPermissionsStore.load().isEnabled(category)
+
+    fun setCategoryEnabled(category: MinecraftCommandCategory, enabled: Boolean) {
+        CommandPermissionsStore.save(CommandPermissionsStore.load().withCategory(category, enabled))
     }
 
-    private fun isTimeValue(value: String): Boolean = value.lowercase() in TIME_KEYWORDS || value.toLongOrNull()?.let { it in 0L..24_000L } == true
+    private fun validateCommand(command: String): String? {
+        val tokens = command.split(WHITESPACE)
+        val root = tokens.firstOrNull()?.lowercase() ?: return "is empty."
+        val candidates = definitions.filter { it.root == root }
+        if (candidates.isEmpty()) return when (root) {
+            "tp", "teleport" -> "Teleport is reserved for the fixed Flow self-position probe /tp @s ~ ~ ~; agent command blocks cannot send it."
+            "execute" -> "'execute' is not allowed because it can bypass WEMC command and chunk-selection safeguards."
+            else -> "'$root' is not on the WEMC command whitelist."
+        }
 
-    private fun command(syntax: String, description: String, example: String) = AgentCommandInfo(command = syntax, description = description, isUndoable = false, examples = listOf(example))
+        val enabled = candidates.filter(::isEnabled)
+        if (enabled.isEmpty()) {
+            val categories = candidates.map { it.category.displayName }.distinct().joinToString()
+            return "'$root' is disabled by command permissions ($categories). Open /wemc config to enable its category."
+        }
+        if (enabled.any { it.validator(tokens) == null }) return null
+        return enabled.firstNotNullOfOrNull { it.validator(tokens) }
+            ?: "does not match an enabled WEMC command form."
+    }
+
+    private fun isEnabled(definition: MinecraftCommandDefinition): Boolean = isCategoryEnabled(definition.category)
+
+    private fun definition(
+        root: String,
+        category: MinecraftCommandCategory,
+        syntax: String,
+        description: String,
+        example: String,
+        wikiSource: String,
+        validator: (List<String>) -> String?,
+    ) = MinecraftCommandDefinition(root, category, syntax, description, example, wikiSource, validator)
+
+    private fun isTimeValue(value: String): Boolean = value.lowercase() in TIME_KEYWORDS || isDurationValue(value)
+
+    private fun isDurationValue(value: String): Boolean = Regex("""\d+(?:\.\d+)?[dst]?""").matches(value)
 
     private val COMMAND_BLOCK = Regex("""(?s)```wemc-commands\s*\n(.*?)```""", RegexOption.IGNORE_CASE)
     private val WHITESPACE = Regex("\\s+")
+    private val TIME_QUERY_VALUES = setOf("daytime", "gametime", "day")
     private val TIME_KEYWORDS = setOf("day", "night", "noon", "midnight")
     private val WEATHER = setOf("clear", "rain", "thunder")
-    private val DATA_OPERATIONS = setOf("get", "merge", "modify", "remove")
     private val DATA_TARGETS = setOf("entity", "block", "storage")
+    private val DATA_MUTATIONS = setOf("merge", "modify", "remove")
     private val ITEM_OPERATIONS = setOf("replace", "modify")
     private val EFFECT_OPERATIONS = setOf("give", "clear")
     private val EXPERIENCE_OPERATIONS = setOf("add", "set")
+    private val GAMEMODES = setOf("survival", "creative", "adventure", "spectator")
+    private val TITLE_OPERATIONS = setOf("title", "subtitle", "actionbar")
 }

@@ -31,9 +31,21 @@ For the time-setting smoke test:
 2. Set `/wemc approval ask` to review generated commands, or `/wemc approval approve` to send validated commands automatically.
 3. Run `/wemc chat set the world time to noon`.
 4. Confirm the response contains `time set noon` in a `wemc-commands` block.
-5. In approval mode, inspect with `/wemc agent commands`, then execute with `/wemc agent run`.
+5. In approval mode, inspect with `/wemc command list`, then execute with `/wemc agent run`.
+6. Use `/wemc command history` to review WEMC commands sent during this session.
 
-Only command families listed by `/wemc agent commands` can be sent. A normal chat response without a `wemc-commands` block is never executed. A batch is capped at 100 commands; larger work must be planned as a separate flow rather than automatically over-executed.
+### Operation modes
+
+Open `/wemc config` → **Agent Operation** to select a mode:
+
+- **Single** (default) sends exactly one AI request for each `/wemc chat` command.
+- **Flow** permits a bounded follow-up AI request after a player-approved self-position probe. Enable **Self-position query** in the same page, then WEMC may send its fixed probe `tp @s ~ ~ ~`; it waits for the server's teleport feedback and provides the resolved coordinates only to the next flow step. Use `/wemc flow approve`, `/wemc flow status`, or `/wemc flow cancel` while a flow is active.
+
+Flow does not allow raw `/tp`, `/teleport`, or `/execute` in agent command blocks. `/execute` remains unavailable because it can wrap and relocate block-changing commands outside WEMC's confirmed-chunk/Y-range guard.
+
+Only command families listed by `/wemc command list` can be sent. A normal chat response without a `wemc-commands` block is never executed. Command transport blocks are hidden from the displayed AI reply. A batch is capped at 100 commands; larger work must be planned as a separate flow rather than automatically over-executed.
+
+Block-changing commands (`setblock`, `fill`, `clone`, block-targeted `data` edits, and block-targeted `item` edits) require one or more confirmed chunks. The orange selection draft is not enough: confirm it with the torch first. Targets must remain in confirmed chunks and within the configured inclusive Y range.
 
 ## License
 

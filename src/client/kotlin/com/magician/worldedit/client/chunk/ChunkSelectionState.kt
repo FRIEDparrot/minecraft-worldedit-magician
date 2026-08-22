@@ -75,6 +75,9 @@ object ChunkSelectionState {
         return ChunkSelectionBounds(ChunkPos(minX, minZ), ChunkPos(maxX, maxZ))
     }
 
+    /** Returns an immutable snapshot of confirmed chunks only, for command authorization. */
+    fun confirmedSelectionSnapshot(): Set<ChunkPos> = selectedChunks.toSet()
+
     /** Applies an operation to a confirmed chunk set. */
     private fun applyToSelection(chunks: Set<ChunkPos>, operation: SelectionOperationMode): Boolean = when (operation) {
         SelectionOperationMode.REPLACE -> {

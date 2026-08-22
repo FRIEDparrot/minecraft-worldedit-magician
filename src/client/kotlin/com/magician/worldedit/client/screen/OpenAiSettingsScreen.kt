@@ -250,7 +250,7 @@ class OpenAiSettingsScreen(
 	private fun approvalLabel(mode: ApprovalMode): Component = Component.literal("Approval: ${if (mode == ApprovalMode.ASK) "Ask for approval" else "Approve for me"}")
 
 	private companion object {
-		val TITLE: Component = Component.translatable("screen.worldedit-magician.agent.title")
+		val TITLE: Component = Component.translatable("screen.worldedit-magician.config.openai")
 		val MODEL_LABEL: Component = Component.translatable("screen.worldedit-magician.agent.model")
 		val API_KEY_LABEL: Component = Component.translatable("screen.worldedit-magician.agent.api_key")
 		val BASE_URL_LABEL: Component = Component.translatable("screen.worldedit-magician.agent.base_url")

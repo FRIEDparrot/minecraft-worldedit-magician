@@ -1,11 +1,13 @@
 package com.magician.worldedit.client.command
 
+import com.magician.worldedit.client.chunk.ChunkSelectionState
 import com.magician.worldedit.client.config.ApprovalMode
 import net.minecraft.client.Minecraft
 
 /** Validates and sends whitelisted vanilla commands through the active client connection. */
 object MinecraftCommandExecutor {
     private var pendingCommands: List<String>? = null
+    private val history = ExecutedCommandHistory()
 
     fun submitAgentResponse(response: String, approvalMode: ApprovalMode): String? {
         val validation = MinecraftCommandWhitelist.extractAgentSequence(response) ?: return null
@@ -13,7 +15,7 @@ object MinecraftCommandExecutor {
             is CommandSequenceValidation.Invalid -> "Agent command request rejected: ${validation.message}"
             is CommandSequenceValidation.Valid -> if (approvalMode == ApprovalMode.APPROVE) execute(validation.commands) else {
                 pendingCommands = validation.commands
-                "Agent prepared ${validation.commands.size} allowed command(s). Review with /wemc agent commands, then run /wemc agent run or /wemc agent discard."
+                "Agent prepared ${validation.commands.size} allowed command(s). Review with /wemc command list, then run /wemc agent run or /wemc agent discard."
             }
         }
     }
@@ -21,9 +23,25 @@ object MinecraftCommandExecutor {
     fun execute(commands: List<String>): String {
         val validation = MinecraftCommandWhitelist.validateSequence(commands)
         if (validation is CommandSequenceValidation.Invalid) return "Command sequence rejected: ${validation.message}"
-        val connection = Minecraft.getInstance().player?.connection ?: return "No active player connection."
+        val minecraft = Minecraft.getInstance()
+        val player = minecraft.player ?: return "No active player connection."
+        val connection = player.connection
+        val selection = ChunkSelectionSnapshot(
+            selectedChunks = ChunkSelectionState.confirmedSelectionSnapshot(),
+            minY = ChunkSelectionState.config.minY,
+            maxY = ChunkSelectionState.config.maxY,
+        )
+        val origin = BlockPosition(player.blockX, player.blockY, player.blockZ)
         val validated = (validation as CommandSequenceValidation.Valid).commands
-        validated.forEach(connection::sendCommand)
+        val guardFailure = validated.asSequence()
+            .map { command -> ChunkSelectionCommandGuard.validate(command, selection, origin).message }
+            .firstOrNull { it != null }
+        if (guardFailure != null) return guardFailure
+
+        validated.forEach { command ->
+            connection.sendCommand(command)
+            history.record(command)
+        }
         return "Sent ${validated.size} command(s) to the server. Server permissions and game rules determine the final result."
     }
 
@@ -40,4 +58,6 @@ object MinecraftCommandExecutor {
     }
 
     fun pendingCommands(): List<String> = pendingCommands.orEmpty()
+
+    fun executionHistory(): List<ExecutedCommandHistory.Entry> = history.entries()
 }
