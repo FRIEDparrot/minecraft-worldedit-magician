@@ -48,8 +48,7 @@ object AgentStepPlanParser {
 
 sealed interface SingleModeResponsePolicyResult {
     data object Execute : SingleModeResponsePolicyResult
-    data class RequiresFlow(val steps: Int, val reason: String) : SingleModeResponsePolicyResult
-    data class Invalid(val message: String) : SingleModeResponsePolicyResult
+    data object Invalid : SingleModeResponsePolicyResult
 }
 
 /** Ensures a model cannot bypass single-step policy simply by emitting a command block. */
@@ -57,31 +56,47 @@ object SingleModeResponsePolicy {
     private val commandBlock = Regex("""(?s)```wemc-commands\s*\n.*?```""", RegexOption.IGNORE_CASE)
 
     fun evaluate(response: String): SingleModeResponsePolicyResult {
+        // In SINGLE mode, wemc-commands is allowed directly — execute it.
+        // If no commands, just display the text.
         if (!commandBlock.containsMatchIn(response)) return SingleModeResponsePolicyResult.Execute
-        return when (val parsed = AgentStepPlanParser.parse(response)) {
-            is AgentStepPlanParseResult.Invalid -> SingleModeResponsePolicyResult.Invalid(parsed.message)
-            is AgentStepPlanParseResult.Valid -> when (val plan = parsed.plan) {
-                AgentStepPlan.OneStep -> SingleModeResponsePolicyResult.Execute
-                is AgentStepPlan.RequiresFlow -> SingleModeResponsePolicyResult.RequiresFlow(plan.steps, plan.reason)
-            }
-        }
+        // wemc-commands found — single step, execute directly
+        return SingleModeResponsePolicyResult.Execute
     }
 }
 
 /** Mode-specific instructions supplied to the model before every user request. */
 object AgentStepPlanningPrompt {
     fun instructions(mode: AgentOperationMode): String = buildString {
-        appendLine("Before proposing Minecraft commands, determine the minimum number of execution steps required. One execution step may include multiple independent commands, and WEMC may send that whole batch together.")
-        appendLine("A task is multi-step whenever a later command depends on a value that must first be queried from the server, such as the player's exact position before building a house in front of them.")
-        appendLine("If you provide a wemc-commands block, first include exactly one fenced wemc-plan block.")
-        appendLine("For a one-step task: ```wemc-plan then steps: 1 and requires-flow: false.")
-        appendLine("For a multi-step task: ```wemc-plan then steps: <2 or more>, requires-flow: true, reason: <short reason>, and current-step: <the next step number>.")
-        appendLine("Every Flow step must contain exactly the commands that execute now. Do not put commands from later steps in the current wemc-commands block; WEMC waits for server game messages from this batch and provides them to you before requesting the next step.")
-        appendLine("The tp @s ~ ~ ~ position probe may be used only as the complete command batch of its own step. summon is an entity operation and does not require a chunk selection. setblock, fill, clone, and block-targeted data/item edits do require confirmed chunks and the configured Y range.")
         if (mode == AgentOperationMode.SINGLE) {
-            appendLine("WEMC is in SINGLE mode. You may execute only one-step tasks. For any multi-step task, do not emit wemc-commands or wemc-flow; explain the required steps and ask the player to switch to Flow mode with /wemc operation flow.")
+            appendLine("WEMC is in SINGLE mode. Respond directly with either plain text or a single wemc-commands block containing all commands for a one-step task.")
+            appendLine("If the task requires multiple steps or the player's exact position, do not emit wemc-commands; explain what is needed and ask the player to switch to Flow mode with /wemc operation flow.")
+            appendLine("summon is an entity operation and does not require a chunk selection. setblock, fill, clone, and block-targeted data/item edits do require confirmed chunks and the configured Y range.")
         } else {
-            appendLine("WEMC is in FLOW mode. For a multi-step task that needs the player's position, include exactly tp @s ~ ~ ~ in its wemc-commands block. WEMC sends that command only after player approval, reads the resulting teleport feedback, and continues with the confirmed coordinates. Do not use teleport, tellraw, or execute commands.")
+            appendLine("WEMC is in FLOW mode. Commands are auto-executed without per-step approval.")
+            appendLine()
+            appendLine("Two paths:")
+            appendLine()
+            appendLine("PATH A — Direct command flow (simple tasks, ≤4 steps):")
+            appendLine("  Return wemc-commands with the command(s). If the task is done after this batch, add <eof> on its own line after the block.")
+            appendLine("  If you need another step, do NOT add <eof>. WEMC will send you the server responses and you respond with the next wemc-commands batch (and so on).")
+            appendLine()
+            appendLine("PATH B — Plan-first (complex tasks, ≥5 steps):")
+            appendLine("  First return wemc-plan (no wemc-commands yet):")
+            appendLine("  ```wemc-plan")
+            appendLine("  steps: <N>")
+            appendLine("  reason: <short reason>")
+            appendLine("  ```")
+            appendLine("  After the user approves, you receive the approval and respond with wemc-plan + wemc-commands for step 1. Add <eof> only on the last step.")
+            appendLine()
+            appendLine("END OF FLOW:")
+            appendLine("  - <eof> on its own line after wemc-commands = flow is finished")
+            appendLine("  - Plain text with no wemc-commands = flow is finished, display text")
+            appendLine("  - Empty response = flow is finished silently")
+            appendLine()
+            appendLine("COMMANDS:")
+            appendLine("  Only use wemc-commands blocks. Do not use wemc-plan in PATH A. tp @s ~ ~ ~ may be used freely in commands to query position.")
+            appendLine("  setblock, fill, clone, and block-targeted edits require confirmed chunks and the configured Y range.")
+            appendLine("  Do not use teleport, tellraw, or execute unless you include tp @s ~ ~ ~ to probe the player's position first.")
         }
     }.trim()
 }

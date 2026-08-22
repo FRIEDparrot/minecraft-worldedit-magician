@@ -11,6 +11,7 @@ import com.magician.worldedit.client.chunk.SelectionOperationMode
 import com.magician.worldedit.client.command.AgentFlowAction
 import com.magician.worldedit.client.command.AgentFlowController
 import com.magician.worldedit.client.command.AgentOperationMode
+import com.magician.worldedit.client.command.ExtendedThinkingMode
 import com.magician.worldedit.client.command.AgentOperationSettings
 import com.magician.worldedit.client.command.AgentOperationSettingsStore
 
@@ -386,7 +387,7 @@ object WorldeditMagicianClient : ClientModInitializer {
 
     private fun sendSinglePrompt(settings: OpenAiSettings, prompt: String) {
         sendMessage("Sending message to ${providerId(settings.selectedProvider)}...")
-        AiChatClient.send(settings, prompt, AgentOperationMode.SINGLE).thenAccept { result ->
+        AiChatClient.send(settings, prompt, AgentOperationMode.SINGLE, ExtendedThinkingMode.OFF).thenAccept { result ->
             Minecraft.getInstance().execute {
                 when (result) {
                     is AiChatResult.Success -> displayAndSubmitAgentAnswer(result.answer, settings.approvalMode, singleMode = true)
@@ -397,8 +398,9 @@ object WorldeditMagicianClient : ClientModInitializer {
     }
 
     private fun sendFlowRequest(flow: ActiveFlow, prompt: String) {
-        sendMessage("Flow: requesting step from ${providerId(flow.settings.selectedProvider)}...")
-        AiChatClient.send(flow.settings, prompt, AgentOperationMode.FLOW).thenAccept { result ->
+        val thinkingMode = flow.controller.thinkingModeForStep()
+        sendMessage("Flow: requesting step ${flow.controller.currentStepNumber()} from ${providerId(flow.settings.selectedProvider)}${if (thinkingMode != ExtendedThinkingMode.OFF) " (thinking)" else ""}...")
+        AiChatClient.send(flow.settings, prompt, AgentOperationMode.FLOW, thinkingMode).thenAccept { result ->
             Minecraft.getInstance().execute {
                 if (activeFlow !== flow) return@execute
                 when (result) {
@@ -411,14 +413,10 @@ object WorldeditMagicianClient : ClientModInitializer {
 
     private fun displayAndSubmitAgentAnswer(answer: String, approvalMode: ApprovalMode, singleMode: Boolean = false) {
         if (singleMode) {
-            when (val policy = SingleModeResponsePolicy.evaluate(answer)) {
+            when (SingleModeResponsePolicy.evaluate(answer)) {
                 SingleModeResponsePolicyResult.Execute -> Unit
-                is SingleModeResponsePolicyResult.RequiresFlow -> {
-                    sendMessage("This task needs ${policy.steps} execution steps (${policy.reason}). Switch to Flow mode with /wemc operation flow, then send the request again.")
-                    return
-                }
-                is SingleModeResponsePolicyResult.Invalid -> {
-                    sendMessage("Agent command request rejected: ${policy.message}")
+                SingleModeResponsePolicyResult.Invalid -> {
+                    sendMessage("Agent command request rejected: wemc-commands format is invalid.")
                     return
                 }
             }
@@ -439,41 +437,83 @@ object WorldeditMagicianClient : ClientModInitializer {
     private fun handleFlowAction(flow: ActiveFlow, action: AgentFlowAction) {
         if (activeFlow !== flow || action is AgentFlowAction.Noop) return
         when (action) {
-            AgentFlowAction.AwaitQueryApproval -> sendMessage("Flow is ready to send tp @s ~ ~ ~ as step ${flow.controller.currentStepNumber()}. Use /wemc flow approve or /wemc flow cancel.")
-            is AgentFlowAction.AwaitStepApproval -> sendMessage("Flow prepared step ${action.step}/${action.totalSteps} with ${action.commands.size} command(s). Use /wemc flow approve or /wemc flow cancel.")
-            AgentFlowAction.SendSelfPositionProbe -> {
-                sendFlowCommands(flow, listOf(AgentFlowController.SELF_POSITION_COMMAND), finalStep = false)
+            // Plan-only received — wait for user to approve/reject
+            is AgentFlowAction.AwaitPlanApproval -> {
+                sendMessage("[WEMC] Plan proposed ($/${action.steps} steps): ${action.reason}")
+                sendMessage("[WEMC] Use /wemc flow approve to accept the plan, or /wemc flow cancel to reject.")
             }
-            is AgentFlowAction.SendStep -> {
-                sendFlowCommands(flow, action.commands, action.finalStep)
+            // User approved a plan — now send continuation prompt to get commands
+            AgentFlowAction.PlanApprovedPrompt -> {
+                sendContinuationPrompt(flow)
             }
-            is AgentFlowAction.RequestContinuation -> sendFlowRequest(flow, "${flow.originalPrompt}\n\n${action.context}\n\nContinue with exactly the next step only. Return a wemc-plan for the remaining execution, then one wemc-commands block containing this step's complete command batch. Do not send a later step until WEMC provides the server responses from this step.")
-            is AgentFlowAction.FlowCompleted -> finishFlow(flow, "Flow completed. Server responses were collected for the final step.")
-            is AgentFlowAction.FinalAnswer -> {
-                displayAndSubmitAgentAnswer(action.answer, flow.settings.approvalMode)
+            // User rejected plan
+            AgentFlowAction.PlanRejected -> {
+                finishFlow(flow, "Plan rejected.")
+            }
+            // Execute commands (auto-executed in FLOW mode, no per-step approval)
+            is AgentFlowAction.ExecuteCommands -> {
+                action.displayText?.takeIf { it.isNotEmpty() }?.let { text ->
+                    AgentResponsePresentation.displayText(text)
+                        ?.chunked(240)
+                        ?.forEach(::sendMessage)
+                }
+                executeFlowCommands(flow, action.commands, action.isEof)
+            }
+            // Flow ended (plain text or empty)
+            is AgentFlowAction.FlowEnded -> {
+                action.displayText?.let { text ->
+                    AgentResponsePresentation.displayText(text)
+                        ?.chunked(240)
+                        ?.forEach(::sendMessage)
+                }
                 finishFlow(flow, null)
             }
             is AgentFlowAction.Failed -> finishFlow(flow, action.message)
             AgentFlowAction.Noop -> Unit
+            // RequestContinuation: feed server results back to the agent
+            is AgentFlowAction.RequestContinuation -> {
+                sendFlowRequest(flow, "${flow.originalPrompt}\n\n${action.context}\n\nContinue with exactly the next step only. Return wemc-commands for the next step. Add <eof> only if this is the last step.")
+            }
+            else -> { /* Legacy / unhandled action types — ignore */ }
         }
     }
 
-    private fun sendFlowCommands(flow: ActiveFlow, commands: List<String>, finalStep: Boolean) {
+    private fun executeFlowCommands(flow: ActiveFlow, commands: List<String>, isEof: Boolean) {
         val commandStatus = MinecraftCommandExecutor.execute(commands)
         if (!commandStatus.startsWith("Sent ")) {
             finishFlow(flow, "Flow step ${flow.controller.currentStepNumber()} was not sent: $commandStatus")
             return
         }
-        flow.controller.markStepDispatched(System.currentTimeMillis())
-        sendMessage("Flow step ${flow.controller.currentStepNumber()} sent ${commands.size} command(s); waiting for server responses${if (finalStep) " before finalizing" else " before requesting the next step"}.")
+        if (isEof) {
+            // Single-shot: done after execution
+            sendMessage("[WEMC] Flow finished — ${commands.size} command(s) executed.")
+            finishFlow(flow, null)
+        } else {
+            // Multi-step: monitor server responses then ask for next
+            flow.controller.markStepDispatched(System.currentTimeMillis())
+            sendMessage("[WEMC] Step ${flow.controller.currentStepNumber()} sent ${commands.size} command(s); monitoring server responses...")
+        }
+    }
+
+    private fun sendContinuationPrompt(flow: ActiveFlow) {
+        val continuationPrompt = buildString {
+            appendLine(flow.originalPrompt)
+            appendLine()
+            appendLine("=== PLAN APPROVED ===")
+            appendLine("The user has approved the plan above. Execute step 1.")
+            appendLine("Return wemc-commands for step 1. Add <eof> only if this is the last step.")
+        }
+        sendFlowRequest(flow, continuationPrompt)
     }
 
     private fun approveFlowQuery() {
         val flow = activeFlow ?: run {
-            sendMessage("No flow is awaiting query approval.")
+            sendMessage("No flow is awaiting plan approval.")
             return
         }
-        handleFlowAction(flow, flow.controller.approveCurrentStep(System.currentTimeMillis()))
+        val now = System.currentTimeMillis()
+        // First: check if the controller is waiting for plan approval
+        handleFlowAction(flow, flow.controller.approvePlan(now))
     }
 
     private fun cancelFlow() {
@@ -483,7 +523,7 @@ object WorldeditMagicianClient : ClientModInitializer {
 
     private fun showFlowStatus() {
         if (activeFlow == null) sendMessage("No active flow.")
-        else sendMessage("A flow is active. Use /wemc flow approve when it requests teleport context, or /wemc flow cancel.")
+        else sendMessage("A flow is active. If a plan was proposed, use /wemc flow approve to accept it, or /wemc flow cancel. Otherwise commands are auto-executing.")
     }
 
     private fun setOperationMode(mode: AgentOperationMode) {
