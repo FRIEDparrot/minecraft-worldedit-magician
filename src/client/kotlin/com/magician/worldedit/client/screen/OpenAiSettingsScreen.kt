@@ -67,6 +67,14 @@ class OpenAiSettingsScreen(
 			AiProvider.CLAUDE -> addApiFields(top, left, fieldWidth, settings.claudeApiKey, settings.claudeBaseUrl, "sk-ant-...", "https://api.anthropic.com/v1")
 			AiProvider.GEMINI -> addApiFields(top, left, fieldWidth, settings.geminiApiKey, settings.geminiBaseUrl, "AIza...", "https://generativelanguage.googleapis.com/v1beta")
 			AiProvider.DEEPSEEK -> addApiFields(top, left, fieldWidth, settings.deepSeekApiKey, settings.deepSeekBaseUrl, "sk-...", "https://api.deepseek.com/v1")
+			AiProvider.MINIMAX -> addApiFields(top, left, fieldWidth, settings.minimaxApiKey, settings.minimaxBaseUrl, "Bearer token...", "https://api.minimax.io/v1")
+			AiProvider.MINIMAX_CN -> addApiFields(top, left, fieldWidth, settings.minimaxCnApiKey, settings.minimaxCnBaseUrl, "Bearer token...", "https://api.minimaxi.com/v1")
+			AiProvider.XAI -> addApiFields(top, left, fieldWidth, settings.xaiApiKey, settings.xaiBaseUrl, "Bearer token...", "https://api.x.ai/v1")
+			AiProvider.MISTRAL -> addApiFields(top, left, fieldWidth, settings.mistralApiKey, settings.mistralBaseUrl, "Bearer token...", "https://api.mistral.ai/v1")
+			AiProvider.COHERE -> addApiFields(top, left, fieldWidth, settings.cohereApiKey, settings.cohereBaseUrl, "Bearer token...", "https://api.cohere.ai/v1")
+			AiProvider.PERPLEXITY -> addApiFields(top, left, fieldWidth, settings.perplexityApiKey, settings.perplexityBaseUrl, "Bearer token...", "https://api.perplexity.ai")
+			AiProvider.AZURE -> addAzureFields(top, left, fieldWidth)
+			AiProvider.CUSTOM -> addCustomFields(top, left, fieldWidth)
 			AiProvider.COPILOT -> addApiFields(top, left, fieldWidth, settings.copilotAccessToken, settings.copilotEndpoint, "GitHub OAuth token", "Optional compatible gateway URL")
 		}
 
@@ -121,6 +129,26 @@ class OpenAiSettingsScreen(
 		baseUrlField = addField(left, top + 110, fieldWidth, OLLAMA_URL_LABEL, settings.ollamaBaseUrl, "http://127.0.0.1")
 		addLabel(OLLAMA_PORT_LABEL, left, top + 142)
 		ollamaPortField = addField(left, top + 154, fieldWidth, OLLAMA_PORT_LABEL, settings.ollamaPort.toString(), "11434")
+	}
+
+	private fun addAzureFields(top: Int, left: Int, fieldWidth: Int) {
+		addLabel(API_KEY_LABEL, left, top + 98)
+		apiKeyField = addField(left, top + 110, fieldWidth - 52, API_KEY_LABEL, settings.azureApiKey, "Azure API key", secret = true)
+		addRenderableWidget(Button.builder(Component.literal(if (showSecrets) "Hide" else "Show")) { toggleSecretVisibility() }
+			.bounds(left + fieldWidth - 48, top + 110, 48, 20).build())
+		addLabel(BASE_URL_LABEL, left, top + 142)
+		baseUrlField = addField(left, top + 154, fieldWidth, BASE_URL_LABEL, settings.azureBaseUrl, "https://<resource>.openai.azure.com")
+		addLabel(AZURE_API_VERSION_LABEL, left, top + 186)
+		addField(left, top + 198, fieldWidth, AZURE_API_VERSION_LABEL, settings.azureApiVersion, "2024-10-01-preview")
+	}
+
+	private fun addCustomFields(top: Int, left: Int, fieldWidth: Int) {
+		addLabel(API_KEY_LABEL, left, top + 98)
+		apiKeyField = addField(left, top + 110, fieldWidth - 52, API_KEY_LABEL, settings.customApiKey, "Bearer token (optional)", secret = true)
+		addRenderableWidget(Button.builder(Component.literal(if (showSecrets) "Hide" else "Show")) { toggleSecretVisibility() }
+			.bounds(left + fieldWidth - 48, top + 110, 48, 20).build())
+		addLabel(BASE_URL_LABEL, left, top + 142)
+		baseUrlField = addField(left, top + 154, fieldWidth, BASE_URL_LABEL, settings.customBaseUrl, "https://your-endpoint.com/v1")
 	}
 
 	private fun addLabel(label: Component, x: Int, y: Int) {
@@ -217,6 +245,14 @@ class OpenAiSettingsScreen(
 			AiProvider.CLAUDE -> common.copy(claudeApiKey = apiKeyField?.value.orEmpty(), claudeBaseUrl = baseUrlField?.value.orEmpty(), claudeSelectedModel = model)
 			AiProvider.GEMINI -> common.copy(geminiApiKey = apiKeyField?.value.orEmpty(), geminiBaseUrl = baseUrlField?.value.orEmpty(), geminiSelectedModel = model)
 			AiProvider.DEEPSEEK -> common.copy(deepSeekApiKey = apiKeyField?.value.orEmpty(), deepSeekBaseUrl = baseUrlField?.value.orEmpty(), deepSeekSelectedModel = model)
+			AiProvider.MINIMAX -> common.copy(minimaxApiKey = apiKeyField?.value.orEmpty(), minimaxBaseUrl = baseUrlField?.value.orEmpty(), minimaxSelectedModel = model)
+			AiProvider.MINIMAX_CN -> common.copy(minimaxCnApiKey = apiKeyField?.value.orEmpty(), minimaxCnBaseUrl = baseUrlField?.value.orEmpty(), minimaxCnSelectedModel = model)
+			AiProvider.XAI -> common.copy(xaiApiKey = apiKeyField?.value.orEmpty(), xaiBaseUrl = baseUrlField?.value.orEmpty(), xaiSelectedModel = model)
+			AiProvider.MISTRAL -> common.copy(mistralApiKey = apiKeyField?.value.orEmpty(), mistralBaseUrl = baseUrlField?.value.orEmpty(), mistralSelectedModel = model)
+			AiProvider.COHERE -> common.copy(cohereApiKey = apiKeyField?.value.orEmpty(), cohereBaseUrl = baseUrlField?.value.orEmpty(), cohereSelectedModel = model)
+			AiProvider.PERPLEXITY -> common.copy(perplexityApiKey = apiKeyField?.value.orEmpty(), perplexityBaseUrl = baseUrlField?.value.orEmpty(), perplexitySelectedModel = model)
+			AiProvider.AZURE -> common.copy(azureApiKey = apiKeyField?.value.orEmpty(), azureBaseUrl = baseUrlField?.value.orEmpty(), azureSelectedModel = model)
+			AiProvider.CUSTOM -> common.copy(customApiKey = apiKeyField?.value.orEmpty(), customBaseUrl = baseUrlField?.value.orEmpty(), customSelectedModel = model)
 			AiProvider.COPILOT -> common.copy(copilotAccessToken = apiKeyField?.value.orEmpty(), copilotEndpoint = baseUrlField?.value.orEmpty(), copilotSelectedModel = model)
 		}
 	}
@@ -227,6 +263,14 @@ class OpenAiSettingsScreen(
 		AiProvider.CLAUDE -> current.copy(selectedModel = model, claudeSelectedModel = model)
 		AiProvider.GEMINI -> current.copy(selectedModel = model, geminiSelectedModel = model)
 		AiProvider.DEEPSEEK -> current.copy(selectedModel = model, deepSeekSelectedModel = model)
+		AiProvider.MINIMAX -> current.copy(selectedModel = model, minimaxSelectedModel = model)
+		AiProvider.MINIMAX_CN -> current.copy(selectedModel = model, minimaxCnSelectedModel = model)
+		AiProvider.XAI -> current.copy(selectedModel = model, xaiSelectedModel = model)
+		AiProvider.MISTRAL -> current.copy(selectedModel = model, mistralSelectedModel = model)
+		AiProvider.COHERE -> current.copy(selectedModel = model, cohereSelectedModel = model)
+		AiProvider.PERPLEXITY -> current.copy(selectedModel = model, perplexitySelectedModel = model)
+		AiProvider.AZURE -> current.copy(selectedModel = model, azureSelectedModel = model)
+		AiProvider.CUSTOM -> current.copy(selectedModel = model, customSelectedModel = model)
 		AiProvider.COPILOT -> current.copy(selectedModel = model, copilotSelectedModel = model)
 	}
 
@@ -244,6 +288,14 @@ class OpenAiSettingsScreen(
 		AiProvider.CLAUDE -> "Claude"
 		AiProvider.GEMINI -> "Gemini"
 		AiProvider.DEEPSEEK -> "DeepSeek"
+		AiProvider.MINIMAX -> "MiniMax"
+		AiProvider.MINIMAX_CN -> "MiniMax CN"
+		AiProvider.XAI -> "xAI"
+		AiProvider.MISTRAL -> "Mistral"
+		AiProvider.COHERE -> "Cohere"
+		AiProvider.PERPLEXITY -> "Perplexity"
+		AiProvider.AZURE -> "Azure OpenAI"
+		AiProvider.CUSTOM -> "Custom"
 		AiProvider.COPILOT -> "GitHub Copilot"
 	}
 
@@ -259,6 +311,7 @@ class OpenAiSettingsScreen(
 		val AGENT_NAME_LABEL: Component = Component.translatable("screen.worldedit-magician.agent.name")
 		val CONTEXT_WINDOW_LABEL: Component = Component.translatable("screen.worldedit-magician.agent.context_window")
 		val MAX_OUTPUT_LABEL: Component = Component.translatable("screen.worldedit-magician.agent.max_output")
+		val AZURE_API_VERSION_LABEL: Component = Component.literal("Azure API Version")
 		val MODELS_LABEL: Component = Component.translatable("screen.worldedit-magician.agent.models")
 		val NEXT_MODEL_LABEL: Component = Component.translatable("screen.worldedit-magician.agent.next_model")
 		val TEST_LABEL: Component = Component.translatable("screen.worldedit-magician.openai.test")

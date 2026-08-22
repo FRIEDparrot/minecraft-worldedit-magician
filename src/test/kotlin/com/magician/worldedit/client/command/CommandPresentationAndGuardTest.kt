@@ -15,10 +15,27 @@ class CommandPresentationAndGuardTest {
     }
 
     @Test
+    fun `display text removes the internal step plan block`() {
+        val response = "```wemc-plan\nsteps: 1\nrequires-flow: false\n```\nReady.\n```wemc-commands\ntime set noon\n```"
+
+        assertEquals("Ready.", AgentResponsePresentation.displayText(response))
+    }
+
+    @Test
     fun `command only response has no visible reply text`() {
         assertEquals("", AgentResponsePresentation.displayText("```wemc-commands\nfill 0 64 0 15 64 15 minecraft:stone\n```"))
     }
 
+    @Test
+    fun `summon does not require a confirmed chunk selection`() {
+        val result = ChunkSelectionCommandGuard.validate(
+            command = "summon minecraft:armor_stand ~ ~ ~",
+            selection = ChunkSelectionSnapshot(emptySet(), 0, 320),
+            playerOrigin = BlockPosition(0, 64, 0),
+        )
+
+        assertEquals(null, result.message)
+    }
     @Test
     fun `setblock is blocked without confirmed chunks`() {
         val result = ChunkSelectionCommandGuard.validate(

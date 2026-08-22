@@ -18,11 +18,11 @@ object AgentOperationSettingsStore {
             Files.newBufferedReader(configPath, StandardCharsets.UTF_8).use { reader ->
                 val root = JsonParser.parseReader(reader).asJsonObject
                 AgentOperationSettings(
-                    mode = root.getString("mode").uppercase().let { value -> AgentOperationMode.entries.firstOrNull { it.name == value } ?: AgentOperationMode.SINGLE },
+                    mode = root.getString("mode").uppercase().let { value -> AgentOperationMode.entries.firstOrNull { it.name == value } ?: AgentOperationMode.FLOW },
                     maxAiRequests = root.getInt("maxAiRequests", AgentOperationSettings.DEFAULT_MAX_AI_REQUESTS),
                     maxServerSteps = root.getInt("maxServerSteps", AgentOperationSettings.DEFAULT_MAX_SERVER_STEPS),
                     queryTimeoutSeconds = root.getInt("queryTimeoutSeconds", AgentOperationSettings.DEFAULT_QUERY_TIMEOUT_SECONDS),
-                    allowSelfPositionQuery = root.getBoolean("allowSelfPositionQuery", false),
+                    allowSelfPositionQuery = root.getBoolean("allowSelfPositionQuery", true),
                 ).normalized()
             }
         }.getOrDefault(AgentOperationSettings())

@@ -7,17 +7,22 @@ import net.minecraft.client.gui.GuiGraphics
 import net.minecraft.client.gui.components.Button
 import net.minecraft.client.gui.screens.Screen
 import net.minecraft.network.chat.Component
+import net.minecraft.network.chat.TextColor
 
-/** Lets players decide which command families the agent is allowed to request. */
+/**
+ * Lets players decide which command families the agent is allowed to request.
+ * State is shown with colored [ON]/[OFF] labels, click to toggle.
+ */
 class CommandPermissionsScreen(private val parent: Screen?) : Screen(TITLE) {
     override fun init() {
         val buttonWidth = minOf(420, width - 40)
         val left = (width - buttonWidth) / 2
-        val firstY = 48
+        val firstY = 56
 
         MinecraftCommandCategory.entries.forEachIndexed { index, category ->
-            addRenderableWidget(Button.builder(labelFor(category)) {
-                MinecraftCommandWhitelist.setCategoryEnabled(category, !MinecraftCommandWhitelist.isCategoryEnabled(category))
+            val enabled = MinecraftCommandWhitelist.isCategoryEnabled(category)
+            addRenderableWidget(Button.builder(labelFor(category, enabled)) {
+                MinecraftCommandWhitelist.setCategoryEnabled(category, !enabled)
                 Minecraft.getInstance().setScreen(CommandPermissionsScreen(parent))
             }.bounds(left, firstY + index * 24, buttonWidth, 20).build())
         }
@@ -42,10 +47,9 @@ class CommandPermissionsScreen(private val parent: Screen?) : Screen(TITLE) {
         Minecraft.getInstance().setScreen(parent)
     }
 
-    private fun labelFor(category: MinecraftCommandCategory): Component {
-        val state = if (MinecraftCommandWhitelist.isCategoryEnabled(category)) "Enabled" else "Disabled"
-        return Component.literal("[$state] ${category.displayName} — ${category.description}")
-    }
+    private fun labelFor(category: MinecraftCommandCategory, enabled: Boolean): Component =
+        Component.literal("${if (enabled) "[ON]  " else "[OFF] "}${category.displayName} — ${category.description}")
+            .withStyle { it.withColor(TextColor.fromRgb(if (enabled) 0xFF55FF55.toInt() else 0xFFFF5555.toInt())) }
 
     private companion object {
         val TITLE: Component = Component.literal("Agent Command Permissions")

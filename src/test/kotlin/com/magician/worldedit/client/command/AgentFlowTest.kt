@@ -7,19 +7,18 @@ import kotlin.test.assertTrue
 
 class AgentFlowTest {
     @Test
-    fun `operation settings default to single mode with bounded limits`() {
+    fun `operation settings default to flow with thirty AI and fifty server steps`() {
         val normalized = AgentOperationSettings(
-            mode = AgentOperationMode.SINGLE,
-            maxAiRequests = 99,
-            maxServerSteps = -2,
+            maxAiRequests = 31,
+            maxServerSteps = 51,
             queryTimeoutSeconds = 1,
-            allowSelfPositionQuery = true,
         ).normalized()
 
-        assertEquals(AgentOperationMode.SINGLE, normalized.mode)
-        assertEquals(5, normalized.maxAiRequests)
-        assertEquals(0, normalized.maxServerSteps)
+        assertEquals(AgentOperationMode.FLOW, AgentOperationSettings().mode)
+        assertEquals(30, normalized.maxAiRequests)
+        assertEquals(50, normalized.maxServerSteps)
         assertEquals(3, normalized.queryTimeoutSeconds)
+        assertTrue(AgentOperationSettings().allowSelfPositionQuery)
     }
 
     @Test
@@ -41,24 +40,24 @@ class AgentFlowTest {
     }
 
     @Test
-    fun `flow sends a fixed self teleport only after query approval`() {
-        val controller = AgentFlowController(AgentOperationSettings(mode = AgentOperationMode.FLOW, allowSelfPositionQuery = true))
+    fun `flow accepts position context embedded in a tp command`() {
+        val controller = AgentFlowController(AgentOperationSettings(mode = AgentOperationMode.FLOW))
         controller.start()
 
-        assertIs<AgentFlowAction.AwaitQueryApproval>(controller.onAgentResponse("```wemc-flow\nstep: query-player-position\ntarget: @s\n```"))
+        assertIs<AgentFlowAction.AwaitQueryApproval>(controller.onAgentResponse("```wemc-plan\nsteps: 2\nrequires-flow: true\nreason: query position first\n```\n```wemc-commands\ntp @s ~ ~ ~\n```"))
         assertEquals(AgentFlowAction.SendSelfPositionProbe, controller.approveQuery(nowMillis = 1_000))
     }
 
     @Test
     fun `flow converts teleport confirmation into structured continuation context`() {
-        val controller = AgentFlowController(AgentOperationSettings(mode = AgentOperationMode.FLOW, allowSelfPositionQuery = true))
+        val controller = AgentFlowController(AgentOperationSettings(mode = AgentOperationMode.FLOW))
         controller.start()
-        controller.onAgentResponse("```wemc-flow\nstep: query-player-position\ntarget: @s\n```")
+        controller.onAgentResponse("```wemc-plan\nsteps: 2\nrequires-flow: true\nreason: query position first\n```\n```wemc-commands\ntp @s ~ ~ ~\n```")
         controller.approveQuery(nowMillis = 1_000)
+        controller.markStepDispatched(nowMillis = 1_000)
+        controller.onServerGameMessage("Teleported Player to 124.5, 64.0, -320.1", nowMillis = 1_200)
 
-        val action = assertIs<AgentFlowAction.RequestContinuation>(
-            controller.onServerGameMessage("Teleported Player to 124.5, 64.0, -320.1"),
-        )
+        val action = assertIs<AgentFlowAction.RequestContinuation>(controller.completeStepIfReady(nowMillis = 1_700))
 
         assertTrue(action.context.contains("x=124.5"))
         assertTrue(action.context.contains("y=64.0"))
@@ -68,13 +67,14 @@ class AgentFlowTest {
     @Test
     fun `flow rejects a server message after query timeout`() {
         val controller = AgentFlowController(
-            AgentOperationSettings(mode = AgentOperationMode.FLOW, queryTimeoutSeconds = 3, allowSelfPositionQuery = true),
+            AgentOperationSettings(mode = AgentOperationMode.FLOW, queryTimeoutSeconds = 3),
         )
         controller.start()
-        controller.onAgentResponse("```wemc-flow\nstep: query-player-position\ntarget: @s\n```")
+        controller.onAgentResponse("```wemc-plan\nsteps: 2\nrequires-flow: true\nreason: query position first\n```\n```wemc-commands\ntp @s ~ ~ ~\n```")
         controller.approveQuery(nowMillis = 1_000)
+        controller.markStepDispatched(nowMillis = 1_000)
 
-        assertIs<AgentFlowAction.Failed>(controller.timeoutIfDue(nowMillis = 4_001))
+        assertIs<AgentFlowAction.Failed>(controller.completeStepIfReady(nowMillis = 10_001))
         assertIs<AgentFlowAction.Noop>(controller.onServerGameMessage("Teleported Player to 1.0, 2.0, 3.0"))
     }
 
@@ -83,17 +83,53 @@ class AgentFlowTest {
         val controller = AgentFlowController(AgentOperationSettings(mode = AgentOperationMode.FLOW))
         controller.start()
 
-        val action = assertIs<AgentFlowAction.FinalAnswer>(controller.onAgentResponse("The player is ready.\n```wemc-commands\ntime set noon\n```"))
-        assertTrue(action.answer.contains("time set noon"))
+        val action = assertIs<AgentFlowAction.AwaitStepApproval>(controller.onAgentResponse("The player is ready.\n```wemc-plan\nsteps: 1\nrequires-flow: false\n```\n```wemc-commands\ntime set noon\n```"))
+        assertEquals(listOf("time set noon"), action.commands)
     }
 
     @Test
-    fun `flow rejects position requests when the opt in probe permission is disabled`() {
+    fun `flow waits for server responses before it asks for the next command step`() {
         val controller = AgentFlowController(AgentOperationSettings(mode = AgentOperationMode.FLOW))
         controller.start()
 
-        val action = assertIs<AgentFlowAction.Failed>(controller.onAgentResponse("```wemc-flow\nstep: query-player-position\ntarget: @s\n```"))
+        val firstStep = """
+            ```wemc-plan
+            steps: 2
+            requires-flow: true
+            reason: create a staged build
+            ```
+            ```wemc-commands
+            summon minecraft:armor_stand ~ ~ ~
+            ```
+        """.trimIndent()
+        assertIs<AgentFlowAction.AwaitStepApproval>(controller.onAgentResponse(firstStep))
+        assertIs<AgentFlowAction.SendStep>(controller.approveCurrentStep(nowMillis = 1_000))
+        controller.markStepDispatched(nowMillis = 1_000)
+        controller.onServerGameMessage("Summoned new Armor Stand", nowMillis = 1_200)
 
-        assertTrue(action.message.contains("disabled"))
+        val continuation = assertIs<AgentFlowAction.RequestContinuation>(controller.completeStepIfReady(nowMillis = 1_700))
+        assertTrue(continuation.context.contains("Summoned new Armor Stand"))
+        assertTrue(continuation.context.contains("completed_step: 1"))
+    }
+
+    @Test
+    fun `flow sends final command response to the agent before it completes`() {
+        val controller = AgentFlowController(AgentOperationSettings(mode = AgentOperationMode.FLOW))
+        controller.start()
+        controller.onAgentResponse("""
+            ```wemc-plan
+            steps: 1
+            requires-flow: false
+            ```
+            ```wemc-commands
+            summon minecraft:armor_stand ~ ~ ~
+            ```
+        """.trimIndent())
+        controller.approveCurrentStep(nowMillis = 1_000)
+        controller.markStepDispatched(nowMillis = 1_000)
+        controller.onServerGameMessage("Summoned new Armor Stand", nowMillis = 1_200)
+
+        assertIs<AgentFlowAction.RequestContinuation>(controller.completeStepIfReady(nowMillis = 1_700))
+        assertIs<AgentFlowAction.FinalAnswer>(controller.onAgentResponse("The armor stand was summoned."))
     }
 }

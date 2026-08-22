@@ -13,6 +13,9 @@ import com.magician.worldedit.client.command.AgentFlowController
 import com.magician.worldedit.client.command.AgentOperationMode
 import com.magician.worldedit.client.command.AgentOperationSettings
 import com.magician.worldedit.client.command.AgentOperationSettingsStore
+
+import com.magician.worldedit.client.command.SingleModeResponsePolicy
+import com.magician.worldedit.client.command.SingleModeResponsePolicyResult
 import com.magician.worldedit.client.command.AgentResponsePresentation
 import com.magician.worldedit.client.command.MinecraftCommandExecutor
 import com.magician.worldedit.client.command.MinecraftCommandWhitelist
@@ -104,10 +107,13 @@ object WorldeditMagicianClient : ClientModInitializer {
         ClientReceiveMessageEvents.GAME.register { message, _ ->
             handleFlowGameMessage(message.string)
         }
+        ClientReceiveMessageEvents.CHAT.register { message, _, _, _, _ ->
+            handleFlowGameMessage(message.string)
+        }
 
         ClientTickEvents.END_CLIENT_TICK.register {
             activeFlow?.let { flow ->
-                val action = flow.controller.timeoutIfDue(System.currentTimeMillis())
+                val action = flow.controller.completeStepIfReady(System.currentTimeMillis())
                 if (action !is AgentFlowAction.Noop) handleFlowAction(flow, action)
             }
         }
@@ -380,10 +386,10 @@ object WorldeditMagicianClient : ClientModInitializer {
 
     private fun sendSinglePrompt(settings: OpenAiSettings, prompt: String) {
         sendMessage("Sending message to ${providerId(settings.selectedProvider)}...")
-        AiChatClient.send(settings, prompt).thenAccept { result ->
+        AiChatClient.send(settings, prompt, AgentOperationMode.SINGLE).thenAccept { result ->
             Minecraft.getInstance().execute {
                 when (result) {
-                    is AiChatResult.Success -> displayAndSubmitAgentAnswer(result.answer, settings.approvalMode)
+                    is AiChatResult.Success -> displayAndSubmitAgentAnswer(result.answer, settings.approvalMode, singleMode = true)
                     is AiChatResult.Failure -> sendMessage(result.message)
                 }
             }
@@ -392,7 +398,7 @@ object WorldeditMagicianClient : ClientModInitializer {
 
     private fun sendFlowRequest(flow: ActiveFlow, prompt: String) {
         sendMessage("Flow: requesting step from ${providerId(flow.settings.selectedProvider)}...")
-        AiChatClient.send(flow.settings, prompt).thenAccept { result ->
+        AiChatClient.send(flow.settings, prompt, AgentOperationMode.FLOW).thenAccept { result ->
             Minecraft.getInstance().execute {
                 if (activeFlow !== flow) return@execute
                 when (result) {
@@ -403,7 +409,20 @@ object WorldeditMagicianClient : ClientModInitializer {
         }
     }
 
-    private fun displayAndSubmitAgentAnswer(answer: String, approvalMode: ApprovalMode) {
+    private fun displayAndSubmitAgentAnswer(answer: String, approvalMode: ApprovalMode, singleMode: Boolean = false) {
+        if (singleMode) {
+            when (val policy = SingleModeResponsePolicy.evaluate(answer)) {
+                SingleModeResponsePolicyResult.Execute -> Unit
+                is SingleModeResponsePolicyResult.RequiresFlow -> {
+                    sendMessage("This task needs ${policy.steps} execution steps (${policy.reason}). Switch to Flow mode with /wemc operation flow, then send the request again.")
+                    return
+                }
+                is SingleModeResponsePolicyResult.Invalid -> {
+                    sendMessage("Agent command request rejected: ${policy.message}")
+                    return
+                }
+            }
+        }
         AgentResponsePresentation.displayText(answer)
             .takeIf(String::isNotBlank)
             ?.chunked(240)
@@ -413,22 +432,23 @@ object WorldeditMagicianClient : ClientModInitializer {
 
     private fun handleFlowGameMessage(message: String) {
         val flow = activeFlow ?: return
-        handleFlowAction(flow, flow.controller.onServerGameMessage(message))
+        val action = flow.controller.onServerGameMessage(message)
+        if (action !is AgentFlowAction.Noop) handleFlowAction(flow, action)
     }
 
     private fun handleFlowAction(flow: ActiveFlow, action: AgentFlowAction) {
         if (activeFlow !== flow || action is AgentFlowAction.Noop) return
         when (action) {
-            AgentFlowAction.AwaitQueryApproval -> sendMessage("Flow requests self-position query /tp @s ~ ~ ~. Use /wemc flow approve or /wemc flow cancel.")
+            AgentFlowAction.AwaitQueryApproval -> sendMessage("Flow is ready to send tp @s ~ ~ ~ as step ${flow.controller.currentStepNumber()}. Use /wemc flow approve or /wemc flow cancel.")
+            is AgentFlowAction.AwaitStepApproval -> sendMessage("Flow prepared step ${action.step}/${action.totalSteps} with ${action.commands.size} command(s). Use /wemc flow approve or /wemc flow cancel.")
             AgentFlowAction.SendSelfPositionProbe -> {
-                val connection = Minecraft.getInstance().player?.connection
-                if (connection == null) finishFlow(flow, "Flow stopped: no active player connection.")
-                else {
-                    connection.sendCommand("tp @s ~ ~ ~")
-                    sendMessage("Flow sent self-position query; waiting for server feedback.")
-                }
+                sendFlowCommands(flow, listOf(AgentFlowController.SELF_POSITION_COMMAND), finalStep = false)
             }
-            is AgentFlowAction.RequestContinuation -> sendFlowRequest(flow, "${flow.originalPrompt}\n\n${action.context}\n\nContinue the task using this confirmed result. If no more query is needed, provide the final answer and optional wemc-commands block.")
+            is AgentFlowAction.SendStep -> {
+                sendFlowCommands(flow, action.commands, action.finalStep)
+            }
+            is AgentFlowAction.RequestContinuation -> sendFlowRequest(flow, "${flow.originalPrompt}\n\n${action.context}\n\nContinue with exactly the next step only. Return a wemc-plan for the remaining execution, then one wemc-commands block containing this step's complete command batch. Do not send a later step until WEMC provides the server responses from this step.")
+            is AgentFlowAction.FlowCompleted -> finishFlow(flow, "Flow completed. Server responses were collected for the final step.")
             is AgentFlowAction.FinalAnswer -> {
                 displayAndSubmitAgentAnswer(action.answer, flow.settings.approvalMode)
                 finishFlow(flow, null)
@@ -438,12 +458,22 @@ object WorldeditMagicianClient : ClientModInitializer {
         }
     }
 
+    private fun sendFlowCommands(flow: ActiveFlow, commands: List<String>, finalStep: Boolean) {
+        val commandStatus = MinecraftCommandExecutor.execute(commands)
+        if (!commandStatus.startsWith("Sent ")) {
+            finishFlow(flow, "Flow step ${flow.controller.currentStepNumber()} was not sent: $commandStatus")
+            return
+        }
+        flow.controller.markStepDispatched(System.currentTimeMillis())
+        sendMessage("Flow step ${flow.controller.currentStepNumber()} sent ${commands.size} command(s); waiting for server responses${if (finalStep) " before finalizing" else " before requesting the next step"}.")
+    }
+
     private fun approveFlowQuery() {
         val flow = activeFlow ?: run {
             sendMessage("No flow is awaiting query approval.")
             return
         }
-        handleFlowAction(flow, flow.controller.approveQuery(System.currentTimeMillis()))
+        handleFlowAction(flow, flow.controller.approveCurrentStep(System.currentTimeMillis()))
     }
 
     private fun cancelFlow() {
@@ -453,7 +483,7 @@ object WorldeditMagicianClient : ClientModInitializer {
 
     private fun showFlowStatus() {
         if (activeFlow == null) sendMessage("No active flow.")
-        else sendMessage("A flow is active. Use /wemc flow approve when it requests the self-position query, or /wemc flow cancel.")
+        else sendMessage("A flow is active. Use /wemc flow approve when it requests teleport context, or /wemc flow cancel.")
     }
 
     private fun setOperationMode(mode: AgentOperationMode) {
@@ -465,7 +495,7 @@ object WorldeditMagicianClient : ClientModInitializer {
 
     private fun showOperationStatus() {
         val settings = AgentOperationSettingsStore.load()
-        sendMessage("Operation: ${if (settings.mode == AgentOperationMode.SINGLE) "Single" else "Flow"}; max AI requests ${settings.maxAiRequests}; max server queries ${settings.maxServerSteps}; self-position query ${if (settings.allowSelfPositionQuery) "enabled" else "disabled"}.")
+        sendMessage("Operation: ${if (settings.mode == AgentOperationMode.SINGLE) "Single" else "Flow"}; max AI steps ${settings.maxAiRequests}; max server steps ${settings.maxServerSteps}; teleport context enabled by default.")
     }
 
     private fun finishFlow(flow: ActiveFlow?, message: String?) {
@@ -508,6 +538,14 @@ object WorldeditMagicianClient : ClientModInitializer {
         AiProvider.CLAUDE -> settings.copy(selectedModel = model, claudeSelectedModel = model)
         AiProvider.GEMINI -> settings.copy(selectedModel = model, geminiSelectedModel = model)
         AiProvider.DEEPSEEK -> settings.copy(selectedModel = model, deepSeekSelectedModel = model)
+        AiProvider.MINIMAX -> settings.copy(selectedModel = model, minimaxSelectedModel = model)
+        AiProvider.MINIMAX_CN -> settings.copy(selectedModel = model, minimaxCnSelectedModel = model)
+        AiProvider.XAI -> settings.copy(selectedModel = model, xaiSelectedModel = model)
+        AiProvider.MISTRAL -> settings.copy(selectedModel = model, mistralSelectedModel = model)
+        AiProvider.COHERE -> settings.copy(selectedModel = model, cohereSelectedModel = model)
+        AiProvider.PERPLEXITY -> settings.copy(selectedModel = model, perplexitySelectedModel = model)
+        AiProvider.AZURE -> settings.copy(selectedModel = model, azureSelectedModel = model)
+        AiProvider.CUSTOM -> settings.copy(selectedModel = model, customSelectedModel = model)
         AiProvider.COPILOT -> settings.copy(selectedModel = model, copilotSelectedModel = model)
     }
 
@@ -517,6 +555,14 @@ object WorldeditMagicianClient : ClientModInitializer {
         AiProvider.CLAUDE -> settings.claudeApiKey.isNotBlank()
         AiProvider.GEMINI -> settings.geminiApiKey.isNotBlank()
         AiProvider.DEEPSEEK -> settings.deepSeekApiKey.isNotBlank()
+        AiProvider.MINIMAX -> settings.minimaxApiKey.isNotBlank()
+        AiProvider.MINIMAX_CN -> settings.minimaxCnApiKey.isNotBlank()
+        AiProvider.XAI -> settings.xaiApiKey.isNotBlank()
+        AiProvider.MISTRAL -> settings.mistralApiKey.isNotBlank()
+        AiProvider.COHERE -> settings.cohereApiKey.isNotBlank()
+        AiProvider.PERPLEXITY -> settings.perplexityApiKey.isNotBlank()
+        AiProvider.AZURE -> settings.azureApiKey.isNotBlank() && settings.azureBaseUrl.isNotBlank()
+        AiProvider.CUSTOM -> settings.customBaseUrl.isNotBlank()
         AiProvider.COPILOT -> settings.copilotAccessToken.isNotBlank()
     }
 
@@ -528,6 +574,14 @@ object WorldeditMagicianClient : ClientModInitializer {
         AiProvider.CLAUDE -> "claude"
         AiProvider.GEMINI -> "gemini"
         AiProvider.DEEPSEEK -> "deepseek"
+        AiProvider.MINIMAX -> "minimax"
+        AiProvider.MINIMAX_CN -> "minimax_cn"
+        AiProvider.XAI -> "xai"
+        AiProvider.MISTRAL -> "mistral"
+        AiProvider.COHERE -> "cohere"
+        AiProvider.PERPLEXITY -> "perplexity"
+        AiProvider.AZURE -> "azure"
+        AiProvider.CUSTOM -> "custom"
         AiProvider.COPILOT -> "copilot"
     }
 

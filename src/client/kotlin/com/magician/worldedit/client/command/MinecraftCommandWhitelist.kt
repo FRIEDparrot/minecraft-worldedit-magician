@@ -58,6 +58,7 @@ object MinecraftCommandWhitelist {
     private const val TIME_WIKI = "https://minecraft.wiki/w/Commands/time"
     private const val DATA_WIKI = "https://minecraft.wiki/w/Commands/data"
     private const val CLEAR_WIKI = "https://minecraft.wiki/w/Commands/clear"
+    private const val TELEPORT_WIKI = "https://minecraft.wiki/w/Commands/teleport"
     private const val COMMANDS_WIKI = "https://minecraft.wiki/w/Commands"
 
     private val definitions: List<MinecraftCommandDefinition> = listOf(
@@ -107,6 +108,9 @@ object MinecraftCommandWhitelist {
             if (tokens.size >= 4 && tokens[1].lowercase() in DATA_MUTATIONS && tokens[2].lowercase() in setOf("block", "storage")) null
             else "must use data <merge|modify|remove> <block|storage> ..."
         },
+        definition("tp", MinecraftCommandCategory.ENTITY, "tp @s ~ ~ ~", "Reports the player's current position through standard teleport feedback for Flow context.", "tp @s ~ ~ ~", TELEPORT_WIKI) { tokens ->
+            if (tokens == listOf("tp", "@s", "~", "~", "~")) null else "Flow position context must use exactly: tp @s ~ ~ ~."
+        },
         definition("summon", MinecraftCommandCategory.ENTITY, "summon <entity> [position] [nbt]", "Spawn an entity.", "summon minecraft:armor_stand ~ ~ ~", COMMANDS_WIKI) { tokens ->
             if (tokens.size >= 2) null else "requires an entity type."
         },
@@ -150,7 +154,7 @@ object MinecraftCommandWhitelist {
             appendLine("- ${category.displayName}: ${commands.joinToString { "/${it.syntax}" }}")
         }
         if (disabled.isNotEmpty()) appendLine("Disabled command categories (do not request them): ${disabled.joinToString { it.displayName }}.")
-        appendLine("Never request arbitrary execute/function/schedule/command-block/admin/server-lifecycle commands. In Flow mode, WEMC alone may issue the fixed self-position probe tp @s ~ ~ ~ after player approval; never request tp or teleport in wemc-commands.")
+        appendLine("Never request arbitrary execute/function/schedule/command-block/admin/server-lifecycle commands. Flow position context uses exactly tp @s ~ ~ ~ in a wemc-commands block after player approval; do not use teleport or any other tp form.")
     }.trim()
 
     fun validateSequence(commands: List<String>): CommandSequenceValidation {
@@ -187,7 +191,7 @@ object MinecraftCommandWhitelist {
         val root = tokens.firstOrNull()?.lowercase() ?: return "is empty."
         val candidates = definitions.filter { it.root == root }
         if (candidates.isEmpty()) return when (root) {
-            "tp", "teleport" -> "Teleport is reserved for the fixed Flow self-position probe /tp @s ~ ~ ~; agent command blocks cannot send it."
+            "teleport" -> "Use the Flow context form /tp @s ~ ~ ~; /teleport is not enabled."
             "execute" -> "'execute' is not allowed because it can bypass WEMC command and chunk-selection safeguards."
             else -> "'$root' is not on the WEMC command whitelist."
         }

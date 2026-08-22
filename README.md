@@ -38,10 +38,10 @@ For the time-setting smoke test:
 
 Open `/wemc config` → **Agent Operation** to select a mode:
 
-- **Single** (default) sends exactly one AI request for each `/wemc chat` command.
-- **Flow** permits a bounded follow-up AI request after a player-approved self-position probe. Enable **Self-position query** in the same page, then WEMC may send its fixed probe `tp @s ~ ~ ~`; it waits for the server's teleport feedback and provides the resolved coordinates only to the next flow step. Use `/wemc flow approve`, `/wemc flow status`, or `/wemc flow cancel` while a flow is active.
+- **Flow** (default) runs a bounded conversational sequence: up to 30 AI steps and 50 server steps. The agent first declares its execution-step count; one step may include multiple independent commands. WEMC executes one command batch, waits for the resulting server chat/game messages, collects them into the next model prompt, and only then requests the following step. Use `/wemc flow approve`, `/wemc flow status`, or `/wemc flow cancel` while a flow is active.
+- **Single** sends exactly one AI request for each `/wemc chat` command. If the task needs server information before later commands can run, Single mode asks you to switch to Flow instead of sending a partial command batch.
 
-Flow does not allow raw `/tp`, `/teleport`, or `/execute` in agent command blocks. `/execute` remains unavailable because it can wrap and relocate block-changing commands outside WEMC's confirmed-chunk/Y-range guard.
+Flow permits only the position-context form `tp @s ~ ~ ~` in agent command blocks; it is sent after `/wemc flow approve`. Other `/tp` and `/teleport` forms remain disabled. `summon` is an entity operation and does not need a confirmed chunk selection. `setblock`, `fill`, `clone`, and block-targeted `data`/`item` edits still require confirmed chunks and the configured Y range. `/execute` remains unavailable because it can wrap and relocate block-changing commands outside WEMC's confirmed-chunk/Y-range guard.
 
 Only command families listed by `/wemc command list` can be sent. A normal chat response without a `wemc-commands` block is never executed. Command transport blocks are hidden from the displayed AI reply. A batch is capped at 100 commands; larger work must be planned as a separate flow rather than automatically over-executed.
 

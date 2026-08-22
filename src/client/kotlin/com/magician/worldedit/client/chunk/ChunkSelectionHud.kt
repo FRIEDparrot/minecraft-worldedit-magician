@@ -12,8 +12,8 @@ import net.minecraft.world.item.Items
 object ChunkSelectionHud {
     private const val LEFT = 8
     private const val TOP = 8
-    private const val WIDTH = 184
-    private const val HEIGHT = 54
+    private const val WIDTH = 210
+    private const val HEIGHT = 72
 
     fun register() {
         HudElementRegistry.attachElementBefore(
@@ -32,13 +32,17 @@ object ChunkSelectionHud {
         val activeCount = if (pendingCount > 0) pendingCount else state.selectedChunkCount()
         val accent = if (pendingCount > 0) PENDING else SELECTED
 
+        val blockPos = player.blockPosition()
+        val playerChunk = ChunkPos(blockPos.x shr 4, blockPos.z shr 4)
+
         graphics.fill(LEFT, TOP, LEFT + WIDTH, TOP + HEIGHT, 0xC80D1118.toInt())
         graphics.fill(LEFT, TOP, LEFT + 3, TOP + HEIGHT, accent)
 
         val font = minecraft.font
         graphics.drawString(font, Component.literal("WEMC  ${operationLabel(state.operationMode)} · ${shapeLabel(state.selectionMode)}"), LEFT + 9, TOP + 7, 0xFFFFFFFF.toInt())
-        graphics.drawString(font, Component.literal("$activeCount chunk${if (activeCount == 1) "" else "s"}  ·  Y ${state.config.minY}–${state.config.maxY}"), LEFT + 9, TOP + 20, 0xFFD8E0EA.toInt())
-        graphics.drawString(font, Component.literal(contextHint(state, pendingCount > 0)), LEFT + 9, TOP + 37, 0xFFAAB7C8.toInt())
+        graphics.drawString(font, Component.literal("Player: ${blockPos.x}, ${blockPos.y}, ${blockPos.z}  ·  Chunk[$playerChunk.x, ${playerChunk.z}]"), LEFT + 9, TOP + 20, 0xFFD8E0EA.toInt())
+        graphics.drawString(font, Component.literal("$activeCount chunk${if (activeCount == 1) "" else "s"} selected  ·  Y ${state.config.minY}–${state.config.maxY}"), LEFT + 9, TOP + 37, 0xFFAAB7C8.toInt())
+        graphics.drawString(font, Component.literal(contextHint(state, pendingCount > 0)), LEFT + 9, TOP + 52, 0xFF8896A8.toInt())
     }
 
     private fun contextHint(state: ChunkSelectionState, hasDraft: Boolean): String = when {

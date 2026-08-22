@@ -36,6 +36,13 @@ class MinecraftCommandWhitelistTest {
     }
 
     @Test
+    fun `tp is enabled by default for flow position context`() {
+        val result = MinecraftCommandWhitelist.validateSequence(listOf("tp @s ~ ~ ~"))
+
+        assertEquals(listOf("tp @s ~ ~ ~"), assertIs<CommandSequenceValidation.Valid>(result).commands)
+    }
+
+    @Test
     fun `data get entity is the supported entity information command`() {
         assertEquals(
             listOf("data get entity @s"),

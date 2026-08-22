@@ -38,6 +38,30 @@ object AiModelCatalog {
 			)
 			AiProvider.GEMINI -> fetchGemini(settings)
 			AiProvider.DEEPSEEK -> fetchDeepSeek(settings)
+			AiProvider.MINIMAX -> CompletableFuture.completedFuture(
+				ModelCatalogResult.Failure(AiProvider.MINIMAX, "MiniMax model discovery is not available yet. Enter a MiniMax model ID manually."),
+			)
+			AiProvider.MINIMAX_CN -> CompletableFuture.completedFuture(
+				ModelCatalogResult.Failure(AiProvider.MINIMAX_CN, "MiniMax CN model discovery is not available yet. Enter a MiniMax CN model ID manually."),
+			)
+			AiProvider.XAI -> CompletableFuture.completedFuture(
+				ModelCatalogResult.Failure(AiProvider.XAI, "xAI model discovery is not available yet. Enter an xAI model ID manually."),
+			)
+			AiProvider.MISTRAL -> CompletableFuture.completedFuture(
+				ModelCatalogResult.Failure(AiProvider.MISTRAL, "Mistral model discovery is not available yet. Enter a Mistral model ID manually."),
+			)
+			AiProvider.COHERE -> CompletableFuture.completedFuture(
+				ModelCatalogResult.Failure(AiProvider.COHERE, "Cohere model discovery is not available yet. Enter a Cohere model ID manually."),
+			)
+			AiProvider.PERPLEXITY -> CompletableFuture.completedFuture(
+				ModelCatalogResult.Failure(AiProvider.PERPLEXITY, "Perplexity model discovery is not available yet. Enter a Perplexity model ID manually."),
+			)
+			AiProvider.AZURE -> CompletableFuture.completedFuture(
+				ModelCatalogResult.Failure(AiProvider.AZURE, "Azure model discovery is not available yet. Enter an Azure deployment name manually."),
+			)
+			AiProvider.CUSTOM -> CompletableFuture.completedFuture(
+				ModelCatalogResult.Failure(AiProvider.CUSTOM, "Custom provider has no standard model list. Enter a model ID manually."),
+			)
 			AiProvider.COPILOT -> {
 				val guidance = CopilotProviderSupport.modelCatalogResult()
 				val message = when (guidance) {

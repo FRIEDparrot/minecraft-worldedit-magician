@@ -3,44 +3,68 @@ package com.magician.worldedit.client.screen
 import com.magician.worldedit.client.command.AgentOperationMode
 import com.magician.worldedit.client.command.AgentOperationSettings
 import com.magician.worldedit.client.command.AgentOperationSettingsStore
+import com.magician.worldedit.client.command.PlayerStateContext
 import net.minecraft.client.Minecraft
 import net.minecraft.client.gui.GuiGraphics
 import net.minecraft.client.gui.components.Button
 import net.minecraft.client.gui.screens.Screen
 import net.minecraft.network.chat.Component
+import net.minecraft.network.chat.TextColor
 
-/** Configures the bounded conversational mode without mixing it with provider credentials or command permissions. */
+/**
+ * Configures the bounded conversational mode.
+ * Shows player state + chunk info at the top for immediate context.
+ */
 class AgentOperationScreen(private val parent: Screen?) : Screen(TITLE) {
     private var settings = AgentOperationSettingsStore.load()
 
     override fun init() {
         val buttonWidth = minOf(420, width - 40)
         val left = (width - buttonWidth) / 2
-        val top = height / 2 - 42
+        val top = 72
 
-        addRenderableWidget(Button.builder(modeLabel(settings.mode)) { cycleMode() }
-            .bounds(left, top, buttonWidth, 20).build())
-        addRenderableWidget(Button.builder(Component.literal("Max AI requests: ${settings.maxAiRequests}")) { changeAiLimit() }
-            .bounds(left, top + 28, buttonWidth, 20).build())
-        addRenderableWidget(Button.builder(Component.literal("Max server queries: ${settings.maxServerSteps}")) { changeServerLimit() }
-            .bounds(left, top + 56, buttonWidth, 20).build())
-        addRenderableWidget(Button.builder(Component.literal("Query timeout: ${settings.queryTimeoutSeconds}s")) { changeTimeout() }
-            .bounds(left, top + 84, buttonWidth, 20).build())
-        addRenderableWidget(Button.builder(Component.literal("Self-position query (tp @s ~ ~ ~): ${if (settings.allowSelfPositionQuery) "Enabled" else "Disabled"}")) { toggleSelfPositionQuery() }
-            .bounds(left, top + 112, buttonWidth, 20).build())
+        // Player state info panel at top
+        val playerState = PlayerStateContext.currentPlayerState()
+        val lines = playerState.lines().filter { it.isNotBlank() }
+        val statePanelHeight = (lines.size * 12 + 12).coerceAtMost(100)
+
+        lines.forEachIndexed { index, line ->
+            addRenderableWidget(Button.builder(Component.literal(line)) {}
+                .bounds(left + 8, top + 8 + index * 12, buttonWidth - 16, 12).build())
+        }
+
+        val controlsTop = top + statePanelHeight + 12
+
+        addRenderableWidget(Button.builder(modeButtonLabel(settings.mode)) { cycleMode() }
+            .bounds(left, controlsTop, buttonWidth, 20).build())
+        addRenderableWidget(Button.builder(
+            Component.literal("Max AI requests: ${settings.maxAiRequests}  ← click to cycle")) { changeAiLimit() }
+            .bounds(left, controlsTop + 28, buttonWidth, 20).build())
+        addRenderableWidget(Button.builder(
+            Component.literal("Max server steps: ${settings.maxServerSteps}  ← click to cycle")) { changeServerLimit() }
+            .bounds(left, controlsTop + 56, buttonWidth, 20).build())
+        addRenderableWidget(Button.builder(
+            Component.literal("Query timeout: ${settings.queryTimeoutSeconds}s  ← click to cycle")) { changeTimeout() }
+            .bounds(left, controlsTop + 84, buttonWidth, 20).build())
+
+        // Descriptive notes
+        val detail = when (settings.mode) {
+            AgentOperationMode.SINGLE -> "SINGLE: One AI response only. No continuation requests."
+            AgentOperationMode.FLOW -> "FLOW: Bounded multi-step. Optional tp @s ~ ~ ~ position probe after approval."
+        }
+        addRenderableWidget(Button.builder(Component.literal(detail)) {}
+            .bounds(left, controlsTop + 120, buttonWidth, 20).build())
+        addRenderableWidget(Button.builder(
+            Component.literal("World-changing commands still require selection validation and approval.")) {}
+            .bounds(left, controlsTop + 144, buttonWidth, 20).build())
+
         addRenderableWidget(Button.builder(Component.translatable("gui.back")) { onClose() }
-            .bounds(left, top + 152, buttonWidth, 20).build())
+            .bounds(left, controlsTop + 180, buttonWidth, 20).build())
     }
 
     override fun render(graphics: GuiGraphics, mouseX: Int, mouseY: Int, delta: Float) {
         super.render(graphics, mouseX, mouseY, delta)
-        graphics.drawCenteredString(font, TITLE, width / 2, height / 2 - 82, 0xFFFFFFFF.toInt())
-        val detail = when (settings.mode) {
-            AgentOperationMode.SINGLE -> "One AI response only. No server query continuation."
-            AgentOperationMode.FLOW -> "May run the fixed self-position query tp @s ~ ~ ~, then make bounded follow-up AI requests."
-        }
-        graphics.drawCenteredString(font, Component.literal(detail), width / 2, height / 2 + 112, 0xFFAAAAAA.toInt())
-        graphics.drawCenteredString(font, Component.literal("World-changing commands still require selection validation and approval."), width / 2, height / 2 + 126, 0xFFAAAAAA.toInt())
+        graphics.drawCenteredString(font, TITLE, width / 2, 18, 0xFFFFFFFF.toInt())
     }
 
     override fun onClose() {
@@ -65,13 +89,11 @@ class AgentOperationScreen(private val parent: Screen?) : Screen(TITLE) {
     }
 
     private fun changeTimeout() {
-        val next = if (settings.queryTimeoutSeconds >= AgentOperationSettings.MAX_QUERY_TIMEOUT_SECONDS) AgentOperationSettings.MIN_QUERY_TIMEOUT_SECONDS else settings.queryTimeoutSeconds + 1
+        val next = if (settings.queryTimeoutSeconds >= AgentOperationSettings.MAX_QUERY_TIMEOUT_SECONDS)
+            AgentOperationSettings.MIN_QUERY_TIMEOUT_SECONDS
+        else
+            settings.queryTimeoutSeconds + 1
         settings = settings.copy(queryTimeoutSeconds = next)
-        saveAndReopen()
-    }
-
-    private fun toggleSelfPositionQuery() {
-        settings = settings.copy(allowSelfPositionQuery = !settings.allowSelfPositionQuery)
         saveAndReopen()
     }
 
@@ -81,7 +103,9 @@ class AgentOperationScreen(private val parent: Screen?) : Screen(TITLE) {
         Minecraft.getInstance().setScreen(AgentOperationScreen(parent))
     }
 
-    private fun modeLabel(mode: AgentOperationMode): Component = Component.literal("Operation mode: ${if (mode == AgentOperationMode.SINGLE) "Single" else "Flow"}")
+    private fun modeButtonLabel(mode: AgentOperationMode): Component =
+        Component.literal("Mode: ${if (mode == AgentOperationMode.SINGLE) "SINGLE" else "FLOW"}  ← click to toggle")
+            .withStyle { it.withColor(TextColor.fromRgb(if (mode == AgentOperationMode.SINGLE) 0xFFFFFF55.toInt() else 0xFF55FFFF.toInt())) }
 
     private companion object {
         val TITLE: Component = Component.literal("Agent Operation")
