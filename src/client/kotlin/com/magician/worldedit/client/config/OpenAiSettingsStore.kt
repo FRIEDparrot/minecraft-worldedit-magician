@@ -37,7 +37,7 @@ data class OpenAiSettings(
     val selectedProvider: AiProvider = AiProvider.OPENAI,
     val selectedModel: String = "",
     val openAiSelectedModel: String = "",
-    val reasoningEffort: String = "medium",
+    val reasoningEffort: String = "low",
     val contextWindow: Int = 128_000,
     val approvalMode: ApprovalMode = ApprovalMode.ASK,
     val agentName: String = "WorldEdit Builder",
@@ -122,7 +122,7 @@ object OpenAiSettingsStore {
                     selectedProvider = runCatching { AiProvider.valueOf(root.get("selectedProvider")?.asString ?: "OPENAI") }.getOrDefault(AiProvider.OPENAI),
                     selectedModel = root.get("selectedModel")?.asString ?: "",
                     openAiSelectedModel = root.get("openAiSelectedModel")?.asString?.ifBlank { root.get("selectedModel")?.asString } ?: "",
-                    reasoningEffort = root.get("reasoningEffort")?.asString?.ifBlank { "medium" } ?: "medium",
+                    reasoningEffort = root.get("reasoningEffort")?.asString?.ifBlank { "low" } ?: "low",
                     contextWindow = (root.get("contextWindow")?.asInt ?: 128_000).coerceIn(1_024, 2_000_000),
                     approvalMode = runCatching { ApprovalMode.valueOf(root.get("approvalMode")?.asString ?: "ASK") }.getOrDefault(ApprovalMode.ASK),
                     agentName = root.get("agentName")?.asString?.ifBlank { "WorldEdit Builder" } ?: "WorldEdit Builder",
@@ -203,7 +203,7 @@ object OpenAiSettingsStore {
             addProperty("selectedProvider", settings.selectedProvider.name)
             addProperty("selectedModel", settings.selectedModel.trim())
             addProperty("openAiSelectedModel", settings.openAiSelectedModel.trim())
-            addProperty("reasoningEffort", settings.reasoningEffort.trim().ifBlank { "medium" })
+            addProperty("reasoningEffort", settings.reasoningEffort.trim().ifBlank { "low" })
             addProperty("contextWindow", settings.contextWindow.coerceIn(1_024, 2_000_000))
             addProperty("approvalMode", settings.approvalMode.name)
             addProperty("agentName", settings.agentName.trim().ifBlank { "WorldEdit Builder" })

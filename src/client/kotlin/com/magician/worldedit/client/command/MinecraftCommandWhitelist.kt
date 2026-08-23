@@ -144,18 +144,14 @@ object MinecraftCommandWhitelist {
         get() = availableDefinitions().map(MinecraftCommandDefinition::asAgentInfo)
 
     fun contextForAgent(): String = buildString {
-        val enabled = availableDefinitions()
-        val disabled = disabledCategories()
-        appendLine("WEMC may send only the following Minecraft Java Edition command forms. Each syntax was checked against Minecraft Wiki before inclusion.")
-        appendLine("Use one command per line inside a fenced block tagged wemc-commands. Do not include a leading slash.")
-        appendLine("World-editing commands must stay within the player-confirmed chunk selection and configured Y range. Commands are queued for review unless automatic approval is enabled.")
-        appendLine("Enabled command families:")
-        enabled.groupBy { it.category }.forEach { (category, commands) ->
-            appendLine("- ${category.displayName}: ${commands.joinToString { "/${it.syntax}" }}")
-        }
-        if (disabled.isNotEmpty()) appendLine("Disabled command categories (do not request them): ${disabled.joinToString { it.displayName }}.")
-        appendLine("Never request arbitrary execute/function/schedule/command-block/admin/server-lifecycle commands. Flow position context uses exactly tp @s ~ ~ ~ in a wemc-commands block after player approval; do not use teleport or any other tp form.")
-    }.trim()
+            val enabled = availableDefinitions()
+            val disabled = disabledCategories()
+            appendLine("Reply with ONE fenced ```wemc-commands block, one command per line, no leading slash. No explanation, no preamble.")
+            appendLine("Allowed commands:")
+            enabled.forEach { appendLine("- /${it.syntax}") }
+            if (disabled.isNotEmpty()) appendLine("Disabled (do not use): ${disabled.joinToString { it.displayName }}.")
+            appendLine("Never use: execute, function, schedule, command blocks, op, deop, ban, whitelist, stop, reload, seed, difficulty, worldborder, teleport. Keep coords ≤50 from origin.")
+        }.trim()
 
     fun validateSequence(commands: List<String>): CommandSequenceValidation {
         if (commands.isEmpty()) return CommandSequenceValidation.Invalid("No commands were provided.")

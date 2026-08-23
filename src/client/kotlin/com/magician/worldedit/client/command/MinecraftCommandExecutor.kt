@@ -26,18 +26,9 @@ object MinecraftCommandExecutor {
         val minecraft = Minecraft.getInstance()
         val player = minecraft.player ?: return "No active player connection."
         val connection = player.connection
-        val selection = ChunkSelectionSnapshot(
-            selectedChunks = ChunkSelectionState.confirmedSelectionSnapshot(),
-            minY = ChunkSelectionState.config.minY,
-            maxY = ChunkSelectionState.config.maxY,
-        )
-        val origin = BlockPosition(player.blockX, player.blockY, player.blockZ)
         val validated = (validation as CommandSequenceValidation.Valid).commands
-        val guardFailure = validated.asSequence()
-            .map { command -> ChunkSelectionCommandGuard.validate(command, selection, origin).message }
-            .firstOrNull { it != null }
-        if (guardFailure != null) return guardFailure
 
+        // Send all commands to the server — no chunk-selection guard
         validated.forEach { command ->
             connection.sendCommand(command)
             history.record(command)

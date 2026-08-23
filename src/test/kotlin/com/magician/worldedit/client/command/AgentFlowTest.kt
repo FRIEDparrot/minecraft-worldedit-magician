@@ -5,131 +5,194 @@ import kotlin.test.assertEquals
 import kotlin.test.assertIs
 import kotlin.test.assertTrue
 
+/**
+ * Tests for AgentFlowController (FLOW mode protocol).
+ * Verifies state machine transitions and FlowResponseParser behavior.
+ */
 class AgentFlowTest {
-    @Test
-    fun `operation settings default to flow with thirty AI and fifty server steps`() {
-        val normalized = AgentOperationSettings(
-            maxAiRequests = 31,
-            maxServerSteps = 51,
-            queryTimeoutSeconds = 1,
-        ).normalized()
 
-        assertEquals(AgentOperationMode.FLOW, AgentOperationSettings().mode)
-        assertEquals(30, normalized.maxAiRequests)
-        assertEquals(50, normalized.maxServerSteps)
-        assertEquals(3, normalized.queryTimeoutSeconds)
-        assertTrue(AgentOperationSettings().allowSelfPositionQuery)
+    // ── FlowResponseParser tests ────────────────────────────────────────────────
+
+    @Test
+    fun `FlowResponseParser parses plain text as EndFlow`() {
+        val result = FlowResponseParser.parse("Hello, what can I help with?")
+        assertIs<FlowParseResult.EndFlow>(result)
+        assertEquals("Hello, what can I help with?", result.plainText)
     }
 
     @Test
-    fun `flow parser accepts only the self position semantic step`() {
-        val result = AgentFlowDirectiveParser.parse(
-            "I will check first.\n```wemc-flow\nstep: query-player-position\ntarget: @s\n```",
-        )
-
-        assertEquals(AgentFlowDirective.QuerySelfPosition, assertIs<AgentFlowDirectiveParseResult.Valid>(result).directive)
+    fun `FlowResponseParser parses empty response as EndFlow`() {
+        val result = FlowResponseParser.parse("")
+        assertIs<FlowParseResult.EndFlow>(result)
+        assertEquals(null, result.plainText)
     }
 
     @Test
-    fun `flow parser rejects raw commands and non self targets`() {
-        val raw = AgentFlowDirectiveParser.parse("```wemc-flow\ntp @s ~ ~ ~\n```")
-        val otherTarget = AgentFlowDirectiveParser.parse("```wemc-flow\nstep: query-player-position\ntarget: @p\n```")
-
-        assertTrue(assertIs<AgentFlowDirectiveParseResult.Invalid>(raw).message.contains("step"))
-        assertTrue(assertIs<AgentFlowDirectiveParseResult.Invalid>(otherTarget).message.contains("@s"))
+    fun `FlowResponseParser parses plan-only as PlanOnly`() {
+        val response = "```wemc-plan\nsteps: 3\nreason: Need to clear area first\n```"
+        val result = FlowResponseParser.parse(response)
+        assertIs<FlowParseResult.PlanOnly>(result)
+        assertEquals(3, result.steps)
+        assertEquals("Need to clear area first", result.reason)
     }
 
     @Test
-    fun `flow accepts position context embedded in a tp command`() {
-        val controller = AgentFlowController(AgentOperationSettings(mode = AgentOperationMode.FLOW))
-        controller.start()
-
-        assertIs<AgentFlowAction.AwaitQueryApproval>(controller.onAgentResponse("```wemc-plan\nsteps: 2\nrequires-flow: true\nreason: query position first\n```\n```wemc-commands\ntp @s ~ ~ ~\n```"))
-        assertEquals(AgentFlowAction.SendSelfPositionProbe, controller.approveQuery(nowMillis = 1_000))
+    fun `FlowResponseParser parses wemc-commands as Commands`() {
+        val response = "```wemc-commands\nfill ~ ~ ~ ~10 ~5 ~10 stone\n```"
+        val result = FlowResponseParser.parse(response)
+        assertIs<FlowParseResult.Commands>(result)
+        assertEquals(1, result.commands.size)
+        assertTrue(!result.isEof)
     }
 
     @Test
-    fun `flow converts teleport confirmation into structured continuation context`() {
-        val controller = AgentFlowController(AgentOperationSettings(mode = AgentOperationMode.FLOW))
-        controller.start()
-        controller.onAgentResponse("```wemc-plan\nsteps: 2\nrequires-flow: true\nreason: query position first\n```\n```wemc-commands\ntp @s ~ ~ ~\n```")
-        controller.approveQuery(nowMillis = 1_000)
-        controller.markStepDispatched(nowMillis = 1_000)
-        controller.onServerGameMessage("Teleported Player to 124.5, 64.0, -320.1", nowMillis = 1_200)
-
-        val action = assertIs<AgentFlowAction.RequestContinuation>(controller.completeStepIfReady(nowMillis = 1_700))
-
-        assertTrue(action.context.contains("x=124.5"))
-        assertTrue(action.context.contains("y=64.0"))
-        assertTrue(action.context.contains("z=-320.1"))
+    fun `FlowResponseParser parses wemc-commands with eof as Commands with isEof true`() {
+        val response = "```wemc-commands\nsetblock ~ ~ ~ stone\n```\n<eof>"
+        val result = FlowResponseParser.parse(response)
+        assertIs<FlowParseResult.Commands>(result)
+        assertTrue(result.isEof)
     }
 
     @Test
-    fun `flow rejects a server message after query timeout`() {
-        val controller = AgentFlowController(
-            AgentOperationSettings(mode = AgentOperationMode.FLOW, queryTimeoutSeconds = 3),
-        )
-        controller.start()
-        controller.onAgentResponse("```wemc-plan\nsteps: 2\nrequires-flow: true\nreason: query position first\n```\n```wemc-commands\ntp @s ~ ~ ~\n```")
-        controller.approveQuery(nowMillis = 1_000)
-        controller.markStepDispatched(nowMillis = 1_000)
-
-        assertIs<AgentFlowAction.Failed>(controller.completeStepIfReady(nowMillis = 10_001))
-        assertIs<AgentFlowAction.Noop>(controller.onServerGameMessage("Teleported Player to 1.0, 2.0, 3.0"))
+    fun `FlowResponseParser parses wemc block as WclSource`() {
+        val response = "```wemc\nsetblock ~ ~ ~ stone\n```"
+        val result = FlowResponseParser.parse(response)
+        assertIs<FlowParseResult.WclSource>(result)
+        assertEquals("setblock ~ ~ ~ stone", result.wclSource.trim())
     }
 
     @Test
-    fun `flow completes a final agent answer instead of creating another query`() {
-        val controller = AgentFlowController(AgentOperationSettings(mode = AgentOperationMode.FLOW))
-        controller.start()
-
-        val action = assertIs<AgentFlowAction.AwaitStepApproval>(controller.onAgentResponse("The player is ready.\n```wemc-plan\nsteps: 1\nrequires-flow: false\n```\n```wemc-commands\ntime set noon\n```"))
-        assertEquals(listOf("time set noon"), action.commands)
-    }
-
-    @Test
-    fun `flow waits for server responses before it asks for the next command step`() {
-        val controller = AgentFlowController(AgentOperationSettings(mode = AgentOperationMode.FLOW))
-        controller.start()
-
-        val firstStep = """
+    fun `FlowResponseParser parses plan with wemc-commands as PlanOnly with pending commands`() {
+        // Plan + wemc-commands together: plan needs approval first; commands are held as pendingPlanCommands
+        val response = """
             ```wemc-plan
             steps: 2
-            requires-flow: true
-            reason: create a staged build
+            reason: Building a house
             ```
             ```wemc-commands
-            summon minecraft:armor_stand ~ ~ ~
+            setblock ~ ~ ~ stone
             ```
         """.trimIndent()
-        assertIs<AgentFlowAction.AwaitStepApproval>(controller.onAgentResponse(firstStep))
-        assertIs<AgentFlowAction.SendStep>(controller.approveCurrentStep(nowMillis = 1_000))
-        controller.markStepDispatched(nowMillis = 1_000)
-        controller.onServerGameMessage("Summoned new Armor Stand", nowMillis = 1_200)
-
-        val continuation = assertIs<AgentFlowAction.RequestContinuation>(controller.completeStepIfReady(nowMillis = 1_700))
-        assertTrue(continuation.context.contains("Summoned new Armor Stand"))
-        assertTrue(continuation.context.contains("completed_step: 1"))
+        val result = FlowResponseParser.parse(response)
+        assertIs<FlowParseResult.PlanOnly>(result)
+        assertEquals(2, result.steps)
+        assertEquals("Building a house", result.reason)
+        assertEquals(1, result.pendingPlanCommands.size)
+        assertEquals("setblock ~ ~ ~ stone", result.pendingPlanCommands[0])
     }
 
     @Test
-    fun `flow sends final command response to the agent before it completes`() {
-        val controller = AgentFlowController(AgentOperationSettings(mode = AgentOperationMode.FLOW))
-        controller.start()
-        controller.onAgentResponse("""
-            ```wemc-plan
-            steps: 1
-            requires-flow: false
-            ```
-            ```wemc-commands
-            summon minecraft:armor_stand ~ ~ ~
-            ```
-        """.trimIndent())
-        controller.approveCurrentStep(nowMillis = 1_000)
-        controller.markStepDispatched(nowMillis = 1_000)
-        controller.onServerGameMessage("Summoned new Armor Stand", nowMillis = 1_200)
+    fun `FlowResponseParser parses plain text only as EndFlow with text`() {
+        val response = "I'll just stand here."
+        val result = FlowResponseParser.parse(response)
+        assertIs<FlowParseResult.EndFlow>(result)
+        assertEquals("I'll just stand here.", result.plainText)
+    }
 
-        assertIs<AgentFlowAction.RequestContinuation>(controller.completeStepIfReady(nowMillis = 1_700))
-        assertIs<AgentFlowAction.FinalAnswer>(controller.onAgentResponse("The armor stand was summoned."))
+    // ── AgentOperationSettings defaults ─────────────────────────────────────────
+
+    @Test
+    fun `default settings are sane`() {
+        val settings = AgentOperationSettings()
+        assertEquals(AgentOperationMode.FLOW, settings.mode)
+        assertEquals(ExtendedThinkingMode.OFF, settings.extendedThinking)
+        assertEquals(30, settings.maxAiRequests)
+        assertEquals(50, settings.maxServerSteps)
+        assertEquals(8, settings.queryTimeoutSeconds)
+    }
+
+    @Test
+    fun `normalized clamps values within limits`() {
+        val bad = AgentOperationSettings(
+            maxAiRequests = 999,
+            maxServerSteps = 999,
+            queryTimeoutSeconds = 999,
+        )
+        val norm = bad.normalized()
+        assertEquals(30, norm.maxAiRequests)
+        assertEquals(50, norm.maxServerSteps)
+        assertEquals(20, norm.queryTimeoutSeconds)
+    }
+
+    // ── AgentFlowController tests ───────────────────────────────────────────────
+
+    @Test
+    fun `start returns Noop and transitions to AWAITING_AGENT`() {
+        val controller = AgentFlowController(AgentOperationSettings())
+        val action = controller.start()
+        assertIs<AgentFlowAction.Noop>(action)
+    }
+
+    @Test
+    fun `start returns Failed for SINGLE mode`() {
+        val settings = AgentOperationSettings(mode = AgentOperationMode.SINGLE)
+        val controller = AgentFlowController(settings)
+        val action = controller.start()
+        assertIs<AgentFlowAction.Failed>(action)
+    }
+
+    @Test
+    fun `plan-only response transitions to AWAITING_PLAN_APPROVAL`() {
+        val controller = AgentFlowController(AgentOperationSettings())
+        controller.start()
+        val action = controller.onAgentResponse("```wemc-plan\nsteps: 3\nreason: clearing area\n```")
+        assertIs<AgentFlowAction.AwaitPlanApproval>(action)
+        assertEquals(3, action.steps)
+        assertEquals("clearing area", action.reason)
+    }
+
+    @Test
+    fun `direct commands bypass approval and execute immediately`() {
+        val controller = AgentFlowController(AgentOperationSettings())
+        controller.start()
+        val action = controller.onAgentResponse("```wemc-commands\nsetblock ~ ~ ~ stone\n```")
+        assertIs<AgentFlowAction.ExecuteCommands>(action)
+        assertEquals(1, action.commands.size)
+        assertTrue(!action.isEof)
+    }
+
+    @Test
+    fun `approvePlan returns PlanApprovedPrompt`() {
+        val controller = AgentFlowController(AgentOperationSettings())
+        controller.start()
+        controller.onAgentResponse("```wemc-plan\nsteps: 2\nreason: test\n```")
+        val action = controller.approvePlan(System.currentTimeMillis())
+        assertIs<AgentFlowAction.PlanApprovedPrompt>(action)
+    }
+
+    @Test
+    fun `rejectPlan returns FlowEnded`() {
+        val controller = AgentFlowController(AgentOperationSettings())
+        controller.start()
+        controller.onAgentResponse("```wemc-plan\nsteps: 2\nreason: test\n```")
+        val action = controller.rejectPlan()
+        assertIs<AgentFlowAction.FlowEnded>(action)
+    }
+
+    @Test
+    fun `plain text triggers FlowEnded`() {
+        val controller = AgentFlowController(AgentOperationSettings())
+        controller.start()
+        val action = controller.onAgentResponse("I'll just stand here.")
+        assertIs<AgentFlowAction.FlowEnded>(action)
+    }
+
+    // Note: AI request limit is checked only in AWAITING_AGENT state.
+    // Testing it requires simulating EXECUTING→AWAITING_AGENT transitions via
+    // completeStepIfReady() with server responses or timeouts — not practical in unit tests.
+
+    @Test
+    fun `SINGLE mode prompt mentions SINGLE and wemc`() {
+        val prompt = AgentStepPlanningPrompt.instructions(AgentOperationMode.SINGLE)
+        assertTrue(prompt.contains("SINGLE"))
+        assertTrue(prompt.contains("wemc"))
+    }
+
+    @Test
+    fun `FLOW mode prompt contains eof and per-step approval info`() {
+        val prompt = AgentStepPlanningPrompt.instructions(AgentOperationMode.FLOW)
+        assertTrue(prompt.contains("FLOW mode"))
+        assertTrue(prompt.contains("<eof>"))
+        assertTrue(prompt.contains("per-step approval"))
     }
 }

@@ -18,18 +18,24 @@ import com.magician.worldedit.client.command.AgentOperationSettingsStore
 import com.magician.worldedit.client.command.SingleModeResponsePolicy
 import com.magician.worldedit.client.command.SingleModeResponsePolicyResult
 import com.magician.worldedit.client.command.AgentResponsePresentation
+import com.magician.worldedit.client.command.wcl.WclPipeline
+import com.magician.worldedit.client.command.wcl.WclResult
 import com.magician.worldedit.client.command.MinecraftCommandExecutor
 import com.magician.worldedit.client.command.MinecraftCommandWhitelist
 import com.magician.worldedit.client.config.AiModelCatalog
 import com.magician.worldedit.client.config.AiProvider
 import com.magician.worldedit.client.config.AiChatClient
 import com.magician.worldedit.client.config.AiChatResult
+import com.magician.worldedit.client.config.AiResponseCache
 import com.magician.worldedit.client.config.ApprovalMode
+import com.magician.worldedit.client.config.ChatTurn
 import com.magician.worldedit.client.config.ModelCatalogResult
 import com.magician.worldedit.client.config.OpenAiSettings
 import com.magician.worldedit.client.config.OpenAiSettingsStore
+import com.magician.worldedit.client.config.PlayerStateShortEncoder
+import com.magician.worldedit.client.config.WemcSessionManager
 import com.magician.worldedit.client.config.WorldEditInstallationChecker
-import com.magician.worldedit.client.screen.ConfigurationScreen
+import com.magician.worldedit.client.screen.WemcConfigPanelScreen
 import com.magician.worldedit.client.screen.WorldEditConfigurationScreen
 import com.mojang.brigadier.Command
 import com.mojang.brigadier.arguments.StringArgumentType
@@ -232,10 +238,24 @@ object WorldeditMagicianClient : ClientModInitializer {
                     Command.SINGLE_SUCCESS
                 })),
         )
-        .then(literal("chat").then(argument("prompt", StringArgumentType.greedyString()).executes { context ->
-            sendPrompt(StringArgumentType.getString(context, "prompt"))
-            Command.SINGLE_SUCCESS
-        }))
+        .then(
+                    literal("chat")
+                        .then(literal("init").executes { initChatSession(); Command.SINGLE_SUCCESS })
+                        .then(literal("reinit").executes { reinitChatSession(); Command.SINGLE_SUCCESS })
+                        .then(literal("status").executes { showChatStatus(); Command.SINGLE_SUCCESS })
+                        .then(literal("history").executes { showChatHistory(); Command.SINGLE_SUCCESS })
+                        .then(
+                            literal("cache")
+                                .then(literal("status").executes { showCacheStatus(); Command.SINGLE_SUCCESS })
+                                .then(literal("on").executes { setCacheEnabled(true); Command.SINGLE_SUCCESS })
+                                .then(literal("off").executes { setCacheEnabled(false); Command.SINGLE_SUCCESS })
+                                .then(literal("clear").executes { clearCache(); Command.SINGLE_SUCCESS }),
+                        )
+                        .then(argument("prompt", StringArgumentType.greedyString()).executes { context ->
+                            sendPrompt(StringArgumentType.getString(context, "prompt"))
+                            Command.SINGLE_SUCCESS
+                        }),
+                )
         .then(
             literal("operation")
                 .then(literal("single").executes { setOperationMode(AgentOperationMode.SINGLE); Command.SINGLE_SUCCESS })
@@ -312,7 +332,7 @@ object WorldeditMagicianClient : ClientModInitializer {
 
     private fun openConfigurationScreen() {
         val minecraft = Minecraft.getInstance()
-        minecraft.setScreen(ConfigurationScreen(minecraft.screen))
+        minecraft.setScreen(WemcConfigPanelScreen(minecraft.screen))
     }
 
     private fun openAgentSettingsScreen() {
@@ -346,6 +366,12 @@ object WorldeditMagicianClient : ClientModInitializer {
         val settings = OpenAiSettingsStore.withSelectedProvider(OpenAiSettingsStore.load(), provider)
         OpenAiSettingsStore.save(settings)
         sendMessage("Active provider set to ${providerId(provider)}.")
+        // Rebuild the session so the new provider's system prompt is used
+        val session = WemcSessionManager.current()
+        if (session != null) {
+            WemcSessionManager.reinit(settings)
+            sendMessage("Chat session restarted with the new provider. Previous history was cleared.")
+        }
     }
 
     private fun listModels() {
@@ -386,20 +412,111 @@ object WorldeditMagicianClient : ClientModInitializer {
     }
 
     private fun sendSinglePrompt(settings: OpenAiSettings, prompt: String) {
-        sendMessage("Sending message to ${providerId(settings.selectedProvider)}...")
-        AiChatClient.send(settings, prompt, AgentOperationMode.SINGLE, ExtendedThinkingMode.OFF).thenAccept { result ->
-            Minecraft.getInstance().execute {
-                when (result) {
-                    is AiChatResult.Success -> displayAndSubmitAgentAnswer(result.answer, settings.approvalMode, singleMode = true)
-                    is AiChatResult.Failure -> sendMessage(result.message)
+            val session = WemcSessionManager.current()
+            if (session == null) {
+                sendMessage("No active chat session. Run /wemc chat init first.")
+                return
+            }
+            sendMessage("Sending to ${providerId(settings.selectedProvider)}... (turn ${session.history.size + 1}/${WemcSessionManager.MAX_TURNS})")
+            val userMessage = PlayerStateShortEncoder.wrapPlayerRequest(prompt)
+            AiChatClient.send(
+                settings = settings,
+                prompt = prompt,
+                operationMode = AgentOperationMode.SINGLE,
+                thinkingMode = ExtendedThinkingMode.OFF,
+                systemPrompt = session.systemPrompt,
+                history = session.history.toList(),
+            ).thenAccept { result ->
+                Minecraft.getInstance().execute {
+                    when (result) {
+                        is AiChatResult.Success -> {
+                            if (result.fromCache) {
+                                sendMessage("WEMC cache hit — reused a matching response (no AI request).")
+                            }
+                            WemcSessionManager.recordTurn(
+                                ChatTurn(userContent = userMessage, assistantContent = result.answer)
+                            )
+                            displayAndSubmitAgentAnswer(result.answer, settings.approvalMode, singleMode = true)
+                        }
+                        is AiChatResult.Failure -> sendMessage(result.message)
+                    }
                 }
             }
         }
-    }
+
+        /**
+         * Create a new chat session bound to the active world. Manual: the player
+         * runs this once after configuring their provider, then subsequent
+         * `/wemc chat <prompt>` calls reuse the cached system prompt.
+         */
+        private fun initChatSession() {
+            val settings = OpenAiSettingsStore.load()
+            val worldKey = WemcSessionManager.activeWorldKey()
+            val session = WemcSessionManager.init(worldKey, settings)
+            sendMessage("WEMC chat session initialized (world=$worldKey, id=${session.sessionId.take(8)}).")
+            sendMessage("Send a request with /wemc chat <prompt>. Use /wemc chat reinit to start over.")
+        }
+
+        /**
+         * Replace the current session with a fresh one. The world key is kept
+         * (history is dropped), so the player does not have to re-`init` when
+         * they want a clean slate in the same world.
+         */
+        private fun reinitChatSession() {
+            val settings = OpenAiSettingsStore.load()
+            val session = WemcSessionManager.reinit(settings)
+            sendMessage("WEMC chat session reset (world=${session.worldKey}, id=${session.sessionId.take(8)}).")
+        }
+
+        /**
+         * Print the active session status: id, world, age, turn count, token use.
+         */
+        private fun showChatStatus() {
+            sendMessage(WemcSessionManager.statusLine())
+        }
+
+        /**
+         * Print the last few turns from the rolling history so the player can
+         * verify what the agent has in context.
+         */
+        private fun showChatHistory() {
+            val session = WemcSessionManager.current()
+            if (session == null) {
+                sendMessage("No active chat session. Run /wemc chat init first.")
+                return
+            }
+            if (session.history.isEmpty()) {
+                sendMessage("Chat session ${session.sessionId.take(8)} has no turns yet.")
+                return
+            }
+            sendMessage("Last ${session.history.size} turn(s):")
+            session.history.forEachIndexed { i, turn ->
+                val userPreview = turn.userContent.take(120).replace("\n", " ⏎ ")
+                val assistantPreview = turn.assistantContent.take(120).replace("\n", " ⏎ ")
+                sendMessage("${i + 1}. user: $userPreview")
+                sendMessage("   agent: $assistantPreview")
+            }
+        }
+
+        /**
+         * `/wemc chat cache` subcommand group: status / on / off / clear.
+         */
+        private fun showCacheStatus() {
+                sendMessage(AiResponseCache.statusLine())
+            }
+
+        private fun setCacheEnabled(enabled: Boolean) {
+            AiResponseCache.setEnabled(enabled)
+            sendMessage("WEMC response cache ${if (enabled) "enabled" else "disabled"}.")
+        }
+
+        private fun clearCache() {
+            AiResponseCache.clear()
+            sendMessage("WEMC response cache cleared.")
+        }
 
     private fun sendFlowRequest(flow: ActiveFlow, prompt: String) {
         val thinkingMode = flow.controller.thinkingModeForStep()
-        sendMessage("Flow: requesting step ${flow.controller.currentStepNumber()} from ${providerId(flow.settings.selectedProvider)}${if (thinkingMode != ExtendedThinkingMode.OFF) " (thinking)" else ""}...")
         AiChatClient.send(flow.settings, prompt, AgentOperationMode.FLOW, thinkingMode).thenAccept { result ->
             Minecraft.getInstance().execute {
                 if (activeFlow !== flow) return@execute
@@ -421,11 +538,13 @@ object WorldeditMagicianClient : ClientModInitializer {
                 }
             }
         }
-        AgentResponsePresentation.displayText(answer)
-            .takeIf(String::isNotBlank)
-            ?.chunked(240)
-            ?.forEach(::sendMessage)
-        MinecraftCommandExecutor.submitAgentResponse(answer, approvalMode)?.let(::sendMessage)
+        // In SINGLE mode the executor result IS the display; agent narrative text is stripped
+        val resultMessage = MinecraftCommandExecutor.submitAgentResponse(answer, approvalMode) ?: return
+        if (!resultMessage.startsWith("Sent ")) {
+            // Rejection reason — always show
+            sendMessage(resultMessage)
+        }
+        // "Sent N command(s)" is already shown by the executor; nothing extra to print
     }
 
     private fun handleFlowGameMessage(message: String) {
@@ -439,8 +558,22 @@ object WorldeditMagicianClient : ClientModInitializer {
         when (action) {
             // Plan-only received — wait for user to approve/reject
             is AgentFlowAction.AwaitPlanApproval -> {
-                sendMessage("[WEMC] Plan proposed ($/${action.steps} steps): ${action.reason}")
-                sendMessage("[WEMC] Use /wemc flow approve to accept the plan, or /wemc flow cancel to reject.")
+                // Strip <eof> from plan text before showing
+                val display = action.displayText?.replace(Regex("""(?m)^\s*<eof>\s*$"""), "")?.trim()
+                    ?.takeIf { it.isNotEmpty() }
+                if (display != null) {
+                    AgentResponsePresentation.displayText(display)
+                        ?.chunked(240)
+                        ?.forEach(::sendMessage)
+                }
+                if (action.pendingPlanCommands.isNotEmpty()) {
+                    sendMessage("[WEMC] Plan proposed (${action.steps} steps): ${action.reason}")
+                    sendMessage("[WEMC] First batch (${action.pendingPlanCommands.size} commands) will execute on approval.")
+                    sendMessage("[WEMC] Use /wemc flow approve to accept, /wemc flow cancel to reject.")
+                } else {
+                    sendMessage("[WEMC] Plan proposed (${action.steps} steps): ${action.reason}")
+                    sendMessage("[WEMC] Use /wemc flow approve to accept, /wemc flow cancel to reject.")
+                }
             }
             // User approved a plan — now send continuation prompt to get commands
             AgentFlowAction.PlanApprovedPrompt -> {
@@ -470,6 +603,36 @@ object WorldeditMagicianClient : ClientModInitializer {
             }
             is AgentFlowAction.Failed -> finishFlow(flow, action.message)
             AgentFlowAction.Noop -> Unit
+            // WCL needs compilation + execution
+            is AgentFlowAction.WclReady -> {
+                val player = Minecraft.getInstance().player
+                val pos = player?.blockPosition()
+                val px = pos?.x ?: 0
+                val py = pos?.y ?: 64
+                val pz = pos?.z ?: 0
+                val wclResult = WclPipeline.run(action.wclSource, px, py, pz)
+                when (wclResult) {
+                    is WclResult.Ok -> {
+                        if (wclResult.echoes.isNotEmpty()) {
+                            wclResult.echoes.forEach { sendMessage("[WEMC ECHO] $it") }
+                        }
+                        if (wclResult.commands.isEmpty()) {
+                            sendMessage("[WEMC] WCL produced no commands (check for echo-only output).")
+                        } else {
+                            executeFlowCommands(flow, wclResult.commands, isEof = true)
+                        }
+                    }
+                    is WclResult.Err -> {
+                        val msg = "[WEMC WCL Error] ${wclResult.msg}"
+                        sendMessage(msg)
+                        AgentFlowAction.WclCompilationFailed(msg)
+                    }
+                }
+            }
+            is AgentFlowAction.WclCompilationFailed -> {
+                // Send WCL errors back to agent for correction
+                sendFlowRequest(flow, "The following WCL had errors. Fix the WCL syntax and retry:\n\n${action.errorReport}")
+            }
             // RequestContinuation: feed server results back to the agent
             is AgentFlowAction.RequestContinuation -> {
                 sendFlowRequest(flow, "${flow.originalPrompt}\n\n${action.context}\n\nContinue with exactly the next step only. Return wemc-commands for the next step. Add <eof> only if this is the last step.")
@@ -565,6 +728,12 @@ object WorldeditMagicianClient : ClientModInitializer {
         val settings = withSelectedModel(OpenAiSettingsStore.load().copy(selectedProvider = provider), provider, model)
         OpenAiSettingsStore.save(settings)
         sendMessage("Active model set to ${providerId(provider)}:$model.")
+        // Rebuild the session so the new model is used
+        val session = WemcSessionManager.current()
+        if (session != null) {
+            WemcSessionManager.reinit(settings)
+            sendMessage("Chat session restarted with the new model. Previous history was cleared.")
+        }
     }
 
     private fun setApproval(mode: ApprovalMode) {

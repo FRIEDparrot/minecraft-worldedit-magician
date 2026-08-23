@@ -22,3 +22,9 @@ This should be a plugin that full developed by Agent
 - In Minecraft 1.21.11, `LevelRenderer.collectPerFrameGizmos()` installs the per-frame collector by calling `Gizmos.withCollector()` before returning. Emit custom gizmos from a `RETURN` injection while that temporary collection is still open; a `HEAD` injection runs before collector installation and crashes as soon as any gizmo is submitted.
 - World-changing commands must be sent through the active server connection after whitelist validation; do not mutate client `Level` state through reflection, and never claim a server command is reversible without a server-side rollback mechanism.
 - Before adding, changing, or documenting any vanilla Minecraft command for WEMC, look up its current Java Edition syntax on the Minecraft Wiki (`minecraft.wiki`) first. Do not invent command roots or incomplete forms: `/entity query` is not a vanilla command, `/time query` requires a concrete query argument (for example `daytime` or `gametime`), and entity NBT lookup uses `/data get entity <single-target> [path]`. Record any command-syntax mistake and its prevention here before finishing the change.
+
+
+## Creations 
+- Since it's a mod fully developed by agent, for the functions I ask to tell you. If you come up with the new functions, you should consider if adding it is worth (If it's worth.
+You can add it without my permission (but please discuss and search some infos first)).
+- For the functions, I may ask you to add one function that serve for a specific purpose. But maybe there are many related functions, we need to add more considerations here. If it's really worth, don't be afraid to modify the code directly. 

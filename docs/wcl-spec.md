@@ -2,375 +2,322 @@
 
 ## Overview
 
-WCL is a domain-specific language for expressing Minecraft WorldEdit commands that involve repetition, parameterization, or conditional execution. It compiles down to a sequence of concrete `/` commands.
+WCL is a domain-specific language for expressing Minecraft WorldEdit commands that involve repetition, parameterization, or conditional logic. Instead of the agent generating `setblock` 100 times, it writes a WCL program that the WCL pipeline compiles into concrete Minecraft commands.
 
-WCL is **proposed by the agent** when a player request involves repetitive patterns, or **written directly by the player**. A WCL program must be reviewed by multiple plan agents before execution.
+**Pipeline:** `wemc block` → Lexer → Parser → TypeChecker → Compiler → Minecraft commands → Executor
 
----
-
-## Design Principles
-
-1. **No repetition in source** — a loop replaces 100 `setblock` calls
-2. **Explicit enumeration** — random parameters must be declared, seeded, bounded
-3. **Safe by default** — agents review every WCL program before it runs
-4. **Human-readable output** — the compiled command list is shown to the user before execution
-5. **Chunk-aware** — selection mode and Y range are inherited from context
-
----
-
-## Language Reference
-
-### 1. Primitives
-
-```wcl
-// Single command (no loop)
-setblock ~ ~ ~ stone
-
-// Comment
-// This places stone in a line
-setblock ~+1 ~ ~ stone
+**Execution flow:**
 ```
-
-### 2. Enumerated Values
-
-```wcl
-// Explicit list — expands to N concrete values
-x in [0, 1, 2, 3] {
-    setblock x ~ ~ stone
-}
-```
-
-### 3. Range Loops
-
-```wcl
-// Integer range [start, end) — step defaults to 1
-i from 0 to 10 {
-    setblock ~+i ~ ~ stone
-}
-
-// Step can be specified
-i from 0 to 10 step 2 {
-    setblock ~+i ~ ~ stone
-}
-
-// Negative step
-i from 10 to 0 step -1 {
-    setblock ~+i ~ ~ stone
-}
-```
-
-### 4. Chunk Iteration
-
-```wcl
-// Iterate over selected chunks
-chunk {
-    setblock ~0 ~0 ~0 stone
-}
-
-// Iterate over a sub-region within each chunk (16xYx16)
-x in [0..16), z in [0..16) {
-    setblock ~+x ~ ~+z stone
-}
-```
-
-### 5. Y-Range Iteration
-
-```wcl
-// From bottom to top of current Y range
-y from Y_MIN to Y_MAX {
-    setblock ~0 ~+y ~0 stone
-}
-```
-
-### 6. Dimension Iteration (nested)
-
-```wcl
-x in [0..5], z in [0..5], y in [0..3] {
-    setblock ~+x ~+y ~+z stone
-}
-```
-
-### 7. Parametric Patterns
-
-```wcl
-// Pattern with named parameters
-pattern wall(height: int, length: int) {
-    y in [0..height), x in [0..length) {
-        setblock ~+x ~+y ~ stone
-    }
-}
-
-// Instantiate with arguments
-wall(height=5, length=10)
-```
-
-### 8. Conditionals
-
-```wcl
-// Only execute if condition is true
-count > 10 {
-    setblock ~ ~ ~ redstone_block
-}
-
-// Multiple branches
-mode == "fill" {
-    fill ~ ~ ~ ~10 ~10 ~10 stone
-}
-mode == "outline" {
-    // hollow outline
-    fill ~ ~ ~ ~10 ~10 ~10 stone hollow
-}
-```
-
-### 9. Seeds and Randomness
-
-```wcl
-// Fixed seed for reproducibility
-seed "mywall42"
-
-// Random integer in [min, max] with optional seed
-r = random(0, 255, seed="mywall42")
-
-// Use random in block type
-block = [stone, cobblestone, brick][r % 3]
-setblock ~ ~ ~ block
-```
-
-### 10. Meta-commands
-
-```wcl
-// Print something during execution (not a Minecraft command)
-echo "Placing stone at ~ ~ ~"
-echo "Y range: ${Y_MIN} to ${Y_MAX}"
-
-// Include a coordinate probe
-probe tp @s ~ ~ ~   // result stored in last_tp_result
-x = last_tp_result.x
-```
-
-### 11. Block Placement Styles
-
-```wcl
-// Fill a volume
-volume(0, 0, 0, 10, 5, 10, stone)
-
-// Hollow shell
-shell(0, 0, 0, 10, 10, 10, stone)
-
-// Sphere (approximated)
-sphere(center_x, center_y, center_z, radius, stone)
-
-// Line between two points
-line(~0 ~0 ~0, ~10 ~10 ~10, stone)
-```
-
-### 12. Variables
-
-```wcl
-n = 10
-height = 5
-y in [0..height) {
-    x in [0..n) {
-        setblock ~+x ~+y ~ stone
-    }
-}
-```
-
-### 13. Named Commands (macros)
-
-```wcl
-// Define a reusable named command
-cmd fill_column(x: int, z: int) {
-    y in [Y_MIN..Y_MAX] {
-        setblock x y z stone
-    }
-}
-
-// Call it
-fill_column(x=0, z=0)
-fill_column(x=1, z=0)
+Agent response (```wemc ... ```)
+  → FlowResponseParser.extracts wclSource
+  → WclPipeline.run() → WclLexer → WclParser → WclTypeChecker → WclCompiler
+  → Success: List<String> of MC commands → MinecraftCommandExecutor
+  → Failure: WclError list → sent back to agent for correction
 ```
 
 ---
 
-## Built-in Variables
+## WCL Grammar
+
+### Lexical Structure
+
+```
+Identifiers:  [a-zA-Z_][a-zA-Z0-9_]*   (case-sensitive)
+Variables:   $name or ${name}            (prefixed with $)
+Numbers:     -?[0-9]+                   (Long)
+Strings:     "..."                       (double-quoted)
+Comments:    // ... or # ...
+Newlines:    significant (separate statements)
+```
+
+### Keywords
+
+`in`, `from`, `to`, `step`, `echo`, `probe`, `seed`, `random`, `volume`, `shell`, `line`, `if`, `else`, `true`, `false`, `int`, `str`, `block`
+
+### Built-in Variables (resolve at compile time from player position)
 
 | Variable | Value |
 |---|---|
-| `X`, `Y`, `Z` | Player's current block position |
-| `CHUNK_X`, `CHUNK_Z` | Player's current chunk coordinates |
-| `Y_MIN` | Configured Y range lower bound |
-| `Y_MAX` | Configured Y range upper bound |
-| `SELECTION_SIZE` | Number of selected chunks |
-| `last_tp_result` | Result of last `probe tp @s` |
+| `X` | Player block X |
+| `Y` | Player block Y |
+| `Z` | Player block Z |
+| `Y_MIN` | World minimum Y |
+| `Y_MAX` | World maximum Y |
+| `CHUNK_X` | Player's chunk X (playerX >> 4) |
+| `CHUNK_Z` | Player's chunk Z (playerZ >> 4) |
+
+### Expression Operators
+
+**Integer:** `+`, `-`, `*`, `/`, `%`
+**Comparison:** `==`, `!=`, `<`, `>`, `<=`, `>=`
+**String:** only `+` (concatenation)
 
 ---
 
-## Compilation
+## Statements
 
-A WCL program is compiled to a flat list of Minecraft commands:
+### 1. Minecraft Command (most common)
+
+Any line not recognized as a keyword is treated as a Minecraft command.
+
+```
+setblock ~0 ~0 ~0 stone
+fill ~ ~ ~ ~10 ~5 ~10 stone hollow
+```
+
+Variables substitute with `$name` or `${name}`:
+```
+setblock ~$x ~$y ~$z stone
+```
+
+### 2. Loop — Range (`i from START to END [step STEP]`)
 
 ```wcl
-y in [0..3], x in [0..5] {
+y in [0..3], x in [0..10] {
     setblock x y z stone
 }
 ```
 
-Compiles to:
+Ranges: `start..end` (inclusive), `[start..end]` (inclusive), `[start..<end)` (exclusive end).
+Loop variable is available as `$variable` inside the body.
+
+### 3. Loop — Enumeration
+
+```wcl
+x in [0, 2, 5, 10] {
+    setblock x 64 z stone
+}
 ```
-setblock ~+0 ~+0 ~ stone
-setblock ~+1 ~+0 ~ stone
-setblock ~+2 ~+0 ~ stone
-setblock ~+3 ~+0 ~ stone
-setblock ~+4 ~+0 ~ stone
-setblock ~+5 ~+0 ~ stone
-setblock ~+0 ~+1 ~ stone
-...
+
+### 4. Variable Assignment
+
+```wcl
+n = 10
+fill ~ ~64 ~ ~$n ~64 ~$n stone
+```
+
+### 5. Echo (for debugging / feedback)
+
+```wcl
+echo "Building wall with height: " + $h
+```
+
+Echo lines appear as warnings in the compile result and can be displayed in chat.
+
+### 7. Seed (reproducible randomness)
+
+```wcl
+seed "mywall"
+r = random(0, 255)
+setblock ~$r ~64 ~ stone
+```
+
+Same seed string → same sequence of random values.
+
+### 7b. Random Coordinate Offset
+
+In Minecraft command coordinates, use `~<random(LO, HI)>` to generate a random integer offset at compile time:
+
+```
+~<random(-5, 5)>   → e.g. ~3  (a random offset between -5 and +5)
+```
+
+**Examples:**
+
+```wcl
+// Summon a pig at a random position within ±5 blocks horizontally
+summon minecraft:pig ~<random(-5,5)> ~ ~<random(-5,5)>
+
+// Fill a 10x10 area with random stone variants
+fill ~<random(-5,5)> ~64 ~<random(-5,5)> ~<random(5,15)> ~68 ~<random(5,15)> stone
+```
+
+**Rules:**
+- `~<random(LO, HI)>` must be used INSIDE a coordinate position (starts with `~`)
+- Both `LO` and `HI` must be integer literals (positive or negative)
+- The result is substituted at compile time (same random value every time for same seed)
+- Use `seed "name"` before random calls to lock the sequence
+
+### 7c. Random Item Selector
+
+**Uniform random pick** — `random([a, b, c])` picks one item at random:
+
+```wcl
+fill ~ ~64 ~ ~10 ~64 ~10 stone,<random([cobblestone, mossy_cobblestone, andesite])>
+```
+
+**Weighted random** — `random({a: 60, b: 40})` picks with probability proportional to weight:
+
+```wcl
+setblock ~ ~64 ~ <random({stone: 70, dirt: 20, gravel: 10})>
+```
+
+**Random mobs** (summoning):
+
+```wcl
+// Summon a random hostile mob at spread-out position
+summon <random([minecraft:zombie, minecraft:skeleton, minecraft:spider])> ~<random(-5,5)> ~ ~<random(-5,5)>
+```
+
+**Rules:**
+- `random([...])` — uniform probability
+- `random({...})` — weights are integers; sum should be > 0
+- Items can be block IDs, entity IDs, or any quoted string
+- The selected value is substituted at compile time (deterministic per seed)
+
+### 7. Probe (position query without counting toward command limit)
+
+```wcl
+probe tp @s ~ ~ ~      // sends /tp @s ~ ~ ~ but does NOT count toward MAX_COMMANDS
+```
+
+### 8. Pattern Definition and Call
+
+```wcl
+pattern wall(h: int, len: int) {
+    y in [0..$h] {
+        x in [0..$len] {
+            setblock x y 0 stone
+        }
+    }
+}
+
+// Call it:
+wall(h=5, len=20)
+```
+
+Parameters are bound by name (preferred) or by position.
+
+### 9. Conditional (`if`)
+
+```wcl
+if $count > 10 {
+    echo "Large operation!"
+}
+else {
+    echo "Small operation"
+}
+```
+
+Condition must be a comparison (==, !=, <, >, <=, >=).
+
+### 10. Shape Helpers
+
+#### volume(cx, cy, cz, w, h, d, block)
+Filled rectangular prism centered at (cx, cy, cz).
+
+```wcl
+volume($X, 64, $Z, 10, 5, 10, stone)
+```
+
+#### shell(cx, cy, cz, w, h, d, block)
+Hollow shell (only the surface blocks).
+
+```wcl
+shell($X, 64, $Z, 8, 8, 8, stone hollow)
+```
+
+#### line(x1, y1, z1, x2, y2, z2, block)
+Bresenham's 3D line from (x1,y1,z1) to (x2,y2,z2).
+
+```wcl
+line(0, 64, 0, 20, 64, 20, stone)
 ```
 
 ---
 
-## Agent Review Protocol
+## Error Handling
 
-When the agent proposes WCL (either proactively or after player request), a **multi-agent review** runs before the WCL is shown to the user:
+| Error Type | Cause | Agent Action |
+|---|---|---|
+| `Syntax` | Lexer/parser failure | Fix WCL syntax and retry |
+| `Safety` | Exceeds MAX_COMMANDS (1000) or MAX_FILL_VOLUME (32768) | Rewrite with smaller ranges |
+| `Unknown` | Undefined variable, unknown pattern/function | Define the missing item |
 
-### Reviewer Agents
+Errors are returned as `WclPipeline.Result.Failure` and sent back to the agent in the next prompt for correction.
 
-1. **Architect Agent** — checks structural soundness: Are loops bounded? Are variables used before assignment? Are dimensions consistent?
-2. **Safety Agent** — checks for dangerous patterns: Does the WCL potentially affect too many blocks? Are there `/fill` calls that could crash the server? Is `/setblock` being used with player-placed coordinates?
-3. **Optimization Agent** — checks for redundancies: Can nested loops be flattened? Can the WCL be shortened? Are there duplicate commands that could be collapsed?
+---
 
-### Review Output
+## Chat Interaction
 
-Each agent produces a short report:
+The in-game chat messages support:
 
+### Right-Click to Copy
+
+Chat messages that contain commands or WCL code display a `© Copy` hover tooltip.
+When the player clicks the message, the content is copied to clipboard.
+
+Implementation: Fabric `Text` components with `hoverEvent` showing a "Copy" tooltip,
+and `clickEvent` with `COPY` action containing the text. This is applied to:
+- Each displayed Minecraft command
+- The full generated command list (in debug mode)
+- WCL source code (when shown)
+
+### Debug Mode Display
+
+When `AgentOperationSettings.debugMode = true`:
+1. **Pre-execution**: Shows "WCL compiled to N command(s)" + first 10 commands
+2. **Echo lines**: `[ECHO] ...` messages from `echo` statements
+3. **Post-execution**: Summary of executed commands
+
+Example debug output:
 ```
-ARCHITECT: OK — all loops bounded, 3 dimensions resolved
-SAFETY: WARN — 14400 blocks affected by volume(0,0,0,10,10,10). Confirm intent?
-OPTIMIZATION: SUGGEST — consider using shell() instead of volume() for hollow structure
+[WEMC DEBUG] WCL compiled to 44 command(s):
+  /setblock ~0 ~0 ~0 stone
+  /setblock ~1 ~0 ~0 stone
+  ... and 42 more
+[WEMC] Step 1: 44 WCL command(s) sent; monitoring...
 ```
 
-The review is shown to the user **before execution** (or before plan approval in Flow mode).
+### WCL Source Display
+
+When WCL is compiled, the original WCL source is stored and can be displayed
+on request (e.g., via a chat command like `/wemc last wcl`).
+
+---
+
+## Safety Limits
+
+| Limit | Value | Trigger |
+|---|---|---|
+| `MAX_COMMANDS` | 1000 | Abort if generated command list exceeds this |
+| `MAX_FILL_VOLUME` | 32768 (32³) | Abort if a `volume()` or `shell()` would exceed this |
+
+---
+
+## Debug Mode
+
+When `AgentOperationSettings.debugMode = true`:
+- Shows compiled WCL command count before execution
+- Shows first 10 generated commands
+- Shows echo output (`[ECHO] ...`) lines
 
 ---
 
 ## Protocol Integration
 
-### Agent Proposes WCL
-
-If the agent, while processing a prompt, detects that the task would require 5+ similar commands, it can propose:
+In FLOW mode, the agent returns WCL code in a `wemc` block:
 
 ```
-I've identified a repetitive pattern. I can express this as a WCL program:
+I'm building a wall.
 
-wcl
-y in [0..3], x in [0..5] {
-    setblock x y z stone
+```wemc
+y in [0..4], x in [0..9] {
+    setblock ~x ~y ~ stone
 }
-end_wcl
-
-This will be reviewed by the planning agents before you approve.
 ```
 
-### Player Writes WCL Directly
-
-Player types:
-```
-/wemc exec
-wcl
-x in [0..10] {
-    setblock ~+x ~ ~ stone
-}
-end_wcl
+<eof>
 ```
 
-The WCL is intercepted by the client, routed to the multi-agent reviewer, then shown to the user for confirmation.
+The WCL compiler generates concrete commands, then `MinecraftCommandExecutor.execute()` sends them to the server.
 
-### Continuation Prompt for WCL
-
-Only sent ONCE on first WCL encounter:
-
-```
-One-time context: WEMC Command Language (WCL) — brief reference
-============================================================
-WCL is a domain-specific language that compiles to Minecraft commands.
-
-LOOPS:   x in [0..10) { ... }   or   i from 0 to 10 step 2 { ... }
-RANGES:  [0, 1, 2] or [0..16) (exclusive end)
-VARS:    n = 10, then use $n or ${n}
-PATTERNS: pattern name(args) { }  then  name(args)
-CONDITIONALS: count > 5 { ... }
-SEEDS:   seed "myseed", r = random(0,255,seed="myseed")
-VOLUME/SHELL: volume(x,y,z,w,h,d,block), shell(...)
-PROBE:   probe tp @s  // stores result in last_tp_result
-
-Compile with: /wemc compile <wcl_program>
-Review with:  /wemc review <wcl_program>
-```
+If WCL has errors: error report is sent back to the agent, which should respond with corrected WCL code.
 
 ---
 
-## WCL Grammar (PEG)
+## WCL vs Legacy `wemc-commands`
 
-```peg
-Program       = Statement*
-Statement     = Comment / Loop / PatternDef / PatternCall / Assign / Conditional / Meta / CommandBlock
+`wemc` (WCL) is the **preferred** format. The old `wemc-commands` format (raw one-per-line commands) is still supported for backward compatibility but will eventually be phased out.
 
-Comment       = '//' (!'\n')* '\n'
-
-Loop          = Identifier 'in' Range       '{' Program '}'
-              / Identifier 'from' Number 'to' Number ('step' Number)? '{' Program '}'
-Range         = '[' (Number ('..' Number | (',' Number)*)) ']'
-              / '(' (Number ('..' Number | (',' Number)*)) ')'
-
-PatternDef    = 'pattern' Identifier '(' ParamList? ')' '{' Program '}'
-ParamList     = Identifier ':' Type (',' Identifier ':' Type)*
-PatternCall   = Identifier '(' ArgList? ')'
-ArgList       = Identifier '=' Expr (',' Identifier '=' Expr)*
-
-Assign        = Identifier '=' Expr
-
-Conditional   = Expr '{' Program '}' ('else' '{' Program '}')?
-
-Meta          = 'echo' String
-              / 'probe' MinecraftCommand
-
-CommandBlock  = MinecraftCommand           // single line, no block markers needed
-
-Type          = 'int' / 'str' / 'block'
-Expr          = Identifier / Number / String / MathExpr / CallExpr
-MathExpr      = Expr ('+' / '-' / '*' / '/' / '%') Expr
-CallExpr      = Identifier '(' ArgList? ')'
-
-Identifier    = [a-zA-Z_][a-zA-Z0-9_]*
-Number        = [0-9]+
-String        = '"' (!'"' .)* '"'
-```
-
----
-
-## Rejected Patterns (Safety)
-
-The WCL compiler MUST reject programs that would generate more than `MAX_COMMANDS_PER_FLOW` (default: 1000) concrete commands. If a WCL program would generate more, it must be rejected with a clear error:
-
-```
-WCL ERROR: Program generates 10000 commands (limit: 1000).
-Use a smaller range or chunk selection.
-```
-
-Additionally, these are rejected at compile time:
-- `fill` with volume > 32³ (server-safe limit)
-- `setblock` in coordinates outside player's known bounds without explicit confirmation
-- `/gamerule` or `/difficulty` — blocked entirely
-- `/stop`, `/kill @e` without confirmation
-
----
-
-## Summary of Changes
-
-1. **Agent** — detects repetitive patterns, proposes WCL instead of raw commands
-2. **Multi-agent reviewer** — Architect + Safety + Optimization agents review WCL before execution
-3. **WCL compiler** — compiles to flat command list, enforces safety limits
-4. **User approval** — WCL review output shown before execution
-5. **Grammar** — PEG-based, simple to parse
-6. **First-use context** — WCL reference sent once, then cached
+The `FlowResponseParser` checks for `wemc` blocks **first**, then falls back to `wemc-commands` for legacy responses.
