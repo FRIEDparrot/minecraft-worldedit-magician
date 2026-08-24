@@ -60,7 +60,7 @@ Provider ids: `openai`, `ollama`, `claude`, `gemini`, `deepseek`, `minimax`, `mi
 /wemc chat <prompt…>
 ```
 
-- **SINGLE mode**: exactly one AI request; reply may contain a `wemc-commands` block which goes through approval / execution. No automatic continuation.
+- **SINGLE mode**: exactly one AI request; reply must contain one multi-line `wcl` program, which goes through compilation, approval, and execution. No automatic continuation.
 - **FLOW mode**: starts a bounded multi-step flow. The agent declares `steps:` in a `wemc-plan` block; you approve with `/wemc flow approve`; commands auto-execute; the controller feeds server responses back to the agent up to `maxAiRequests` × 30.
 
 The agent's reply always includes a `Player state:` block (position, rotation, looking-at block, current chunk, selection mode, Y range, selected-chunk count) plus the current whitelist.
@@ -74,6 +74,7 @@ The agent's reply always includes a `Player state:` block (position, rotation, l
 | `/wemc command list` | List page 1 of the whitelist (10 per page, ordered as in §6 of `documentation.md`) |
 | `/wemc command list <n>` | Jump to page `n` |
 | `/wemc command history` | Print every command WEMC has **actually sent** to the server this session, newest first (`ExecutedCommandHistory.entries`, capacity 100) |
+| `/wemc command wcl-history` | Print generated WCL source and compiled MC command count (up to 20 entries), newest first |
 
 ---
 
@@ -85,7 +86,7 @@ The agent's reply always includes a `Player state:` block (position, rotation, l
 | `/wemc agent run` | Send the pending batch through the executor now. Clears the queue. |
 | `/wemc agent discard` | Drop the pending batch. Clears the queue. |
 
-The pending batch is populated whenever the agent emits `wemc-commands` and approval mode is `ASK`. In `APPROVE` mode the queue is always empty after each reply.
+The pending batch is populated from compiled WCL output when approval mode is `ASK`. In `APPROVE` mode the queue is always empty after each reply.
 
 ---
 
@@ -114,9 +115,11 @@ These are **help messages**, not query implementations.
 
 ---
 
-## `/wemc run …` — Reserved (currently no handler)
+## `/wemc run <cmd>` — Execute a whitelisted command directly
 
-`/wemc run` is registered as a branch literal but has no `.executes` block. Typing it does nothing. Use `/wemc agent run` to dispatch a pending batch.
+|| Command | Effect ||
+|---|---|---|
+| `/wemc run setblock ~ ~64 ~ stone` | Executes the command through the whitelist directly (no AI) |
 
 ---
 

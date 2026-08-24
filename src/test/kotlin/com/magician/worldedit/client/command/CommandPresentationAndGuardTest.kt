@@ -5,22 +5,22 @@ import kotlin.test.assertEquals
 
 class CommandPresentationAndGuardTest {
     @Test
-    fun `display text removes every wemc command fence while preserving prose`() {
-        val response = "I will build it.\n```wemc-commands\nsetblock 0 64 0 minecraft:stone\n```\nDone.\n```wemc-commands\ntime set noon\n```"
+    fun `display text removes every wcl fence while preserving prose`() {
+        val response = "I will build it.\n```wcl\nsetblock 0 64 0 minecraft:stone\n```\nDone.\n```wcl\ntime set noon\n```"
 
         assertEquals("I will build it.\n\nDone.", AgentResponsePresentation.displayText(response))
     }
 
     @Test
     fun `display text removes the internal step plan block`() {
-        val response = "```wemc-plan\nsteps: 1\nrequires-flow: false\n```\nReady.\n```wemc-commands\ntime set noon\n```"
+        val response = "```wemc-plan\nsteps: 1\nrequires-flow: false\n```\nReady.\n```wcl\ntime set noon\n```"
 
         assertEquals("Ready.", AgentResponsePresentation.displayText(response))
     }
 
     @Test
-    fun `command only response has no visible reply text`() {
-        assertEquals("", AgentResponsePresentation.displayText("```wemc-commands\nfill 0 64 0 15 64 15 minecraft:stone\n```"))
+    fun `WCL only response has no visible reply text`() {
+        assertEquals("", AgentResponsePresentation.displayText("```wcl\nfill 0 64 0 15 64 15 minecraft:stone\n```"))
     }
 
     @Test

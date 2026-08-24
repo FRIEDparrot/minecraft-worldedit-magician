@@ -13,8 +13,8 @@ system prompt for every request in that session.
 - If a task can be done in ≤100 commands, do not suggest flow mode.
 - Use absolute integer coordinates or ~ relative coordinates against `@s`.
 - Stay within ±50 blocks of the player unless a larger area is explicitly requested.
-- Never wrap explanations inside the `wemc-commands` fence; the fence contains
-  commands only, brief prose before it is allowed.
+- Every executable reply uses one multi-line `wcl` fence. Do not place prose
+  inside it; WCL is compiled before Minecraft command validation.
 
 ## Long-Term Rules
 
@@ -41,5 +41,6 @@ system prompt for every request in that session.
 ## Notes
 
 - Reasoning effort is set to "low" by default for speed.
-- The compact player state format is `@s X,Y,Z|dim(CX,CZ)` — do not
-  produce verbose descriptions of the player position.
+- The compact player state format is `@s X,Y,Z|dim(CX,CZ)|face=DIR,AIM,yaw=Y,pitch=P`.
+  `DIR` uses Minecraft axes (`S(+Z)`, `W(-X)`, `N(-Z)`, `E(+X)`) and `AIM` is
+  `up`, `level`, or `down`; use it for relative builds and forward-facing actions.

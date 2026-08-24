@@ -1,99 +1,82 @@
 package com.magician.worldedit.client.command
 
+import com.magician.worldedit.client.command.wcl.WclPipeline
+import com.magician.worldedit.client.command.wcl.WclResult
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
 import kotlin.test.assertNotNull
-import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /**
- * End-to-end smoke test for the agent response → server command flow.
+ * End-to-end smoke test for the deterministic generated-command pipeline:
  *
- * This test simulates what happens after the AI returns its `wemc-commands`
- * block, without needing a real AI Provider or Minecraft runtime. It exercises
- * the entire deterministic part of the pipeline:
+ *   ```wcl source → FlowResponseParser → WclPipeline → blacklist gate
  *
- *   extractAgentSequence → validateSequence → whitelisted-command execution
- *
- * The only step it cannot exercise in a unit test is `connection.sendCommand()`
- * (the actual network send), because that requires a live Minecraft client.
+ * A Minecraft client connection is intentionally not required for these tests.
  */
 class EndToEndAgentFlowTest {
+    @Test
+    fun `WCL agent response compiles validates and is ready to send`() {
+        val response = """
+            ```wcl
+            time set noon
+            weather clear
+            ```
+        """.trimIndent()
 
-    private val sampleValidAgentResponse = """
-        Sure! I'll set the time to noon and make the weather clear.
+        val parsed = assertIs<FlowParseResult.WclSource>(FlowResponseParser.parse(response))
+        val compiled = assertIs<WclResult.Ok>(WclPipeline.run(parsed.wclSource, 0, 64, 0))
+        val validation = assertIs<CommandSequenceValidation.Valid>(MinecraftCommandWhitelist.validateSequence(compiled.commands))
 
-        ```wemc-commands
-        time set noon
-        weather clear
-        ```
-
-        Done.
-    """.trimIndent()
-
-    private val sampleInvalidCommand = """
-        I will teleport the player far away.
-
-        ```wemc-commands
-        /tp @s 1000 100 1000
-        ```
-    """.trimIndent()
-
-    private val sampleOversizeSequence = buildString {
-        appendLine("```wemc-commands")
-        repeat(101) { i ->
-            appendLine("setblock $i 64 0 minecraft:stone")
-        }
-        appendLine("```")
+        assertEquals(listOf("time set noon", "weather clear"), validation.commands)
     }
 
     @Test
-    fun `valid agent response is extracted, validated, and ready to send`() {
-        val validation = MinecraftCommandWhitelist.extractAgentSequence(sampleValidAgentResponse)
-        val valid = assertIs<CommandSequenceValidation.Valid>(validation)
-        assertEquals(listOf("time set noon", "weather clear"), valid.commands)
+    fun `compiled ordinary Minecraft command passes the blacklist gate`() {
+        val response = """
+            ```wcl
+            tp @s 1000 100 1000
+            ```
+        """.trimIndent()
+
+        val parsed = assertIs<FlowParseResult.WclSource>(FlowResponseParser.parse(response))
+        val compiled = assertIs<WclResult.Ok>(WclPipeline.run(parsed.wclSource, 0, 64, 0))
+        val valid = assertIs<CommandSequenceValidation.Valid>(MinecraftCommandWhitelist.validateSequence(compiled.commands))
+
+        assertEquals(listOf("tp @s 1000 100 1000"), valid.commands)
     }
 
     @Test
-    fun `teleport commands are rejected because they bypass selection safety`() {
-        val validation = MinecraftCommandWhitelist.extractAgentSequence(sampleInvalidCommand)
-        val invalid = assertIs<CommandSequenceValidation.Invalid>(validation)
-        assertTrue(invalid.message.contains("not on the WEMC command whitelist") ||
-            invalid.message.contains("Flow position context") ||
-            invalid.message.contains("teleport") ||
-            invalid.message.contains("does not match an enabled WEMC command form"),
-            "Expected rejection message about teleport, was: ${invalid.message}")
+    fun `oversize WCL loop is rejected by compiler safety limit`() {
+        val source = """
+            i in [0..1000] {
+                setblock ~ ~ ~ minecraft:stone
+            }
+        """.trimIndent()
+
+        val invalid = assertIs<WclResult.Err>(WclPipeline.run(source, 0, 64, 0))
+        assertTrue(
+            invalid.msg.contains("Loop has") && invalid.msg.contains("maximum is"),
+            "Expected loop iteration safety limit, was: ${invalid.msg}",
+        )
     }
 
     @Test
-    fun `oversize sequence directs the agent into flow mode`() {
-        val validation = MinecraftCommandWhitelist.extractAgentSequence(sampleOversizeSequence)
-        val invalid = assertIs<CommandSequenceValidation.Invalid>(validation)
-        assertTrue(invalid.message.contains("Use /wemc flow"),
-            "Expected flow-mode guidance, was: ${invalid.message}")
+    fun `agent response without wcl fence is non executable`() {
+        assertIs<FlowParseResult.EndFlow>(FlowResponseParser.parse("Just chatting with you."))
     }
 
     @Test
-    fun `no fenced block means no command execution is attempted`() {
-        val validation = MinecraftCommandWhitelist.extractAgentSequence("Just chatting with you.")
-        assertNull(validation)
-    }
-
-    @Test
-    fun `exactly one hundred commands passes the validator`() {
+    fun `one hundred compiled commands pass the whitelist`() {
         val commands = (1..100).map { "setblock $it 64 0 minecraft:stone" }
         val validation = MinecraftCommandWhitelist.validateSequence(commands)
-        val valid = assertIs<CommandSequenceValidation.Valid>(validation)
-        assertEquals(100, valid.commands.size)
+        assertEquals(100, assertIs<CommandSequenceValidation.Valid>(validation).commands.size)
     }
 
     @Test
-    fun `chained provider payload is well-formed JSON`() {
-        // Verify the request factory still produces a JSON body that OpenAI
-        // Chat Completions endpoints accept.
+    fun `chained provider payload is well formed JSON`() {
         val body = """{"model":"gpt-4.1-nano","stream":false,"messages":[{"role":"user","content":"hi"}],"max_tokens":16}"""
-        // Round-trip parse to make sure the wire format is valid JSON.
         val parsed = com.google.gson.JsonParser.parseString(body).asJsonObject
         assertNotNull(parsed.get("model"))
         assertNotNull(parsed.get("messages"))

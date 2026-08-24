@@ -1,5 +1,6 @@
 package com.magician.worldedit.client.screen
 
+import com.magician.worldedit.client.WorldeditMagicianClient
 import com.magician.worldedit.client.command.AgentOperationMode
 import com.magician.worldedit.client.command.AgentOperationSettings
 import com.magician.worldedit.client.command.AgentOperationSettingsStore
@@ -13,17 +14,19 @@ import com.magician.worldedit.client.config.ModelCatalogResult
 import com.magician.worldedit.client.config.OpenAiSettings
 import com.magician.worldedit.client.config.OpenAiSettingsStore
 import com.magician.worldedit.client.config.WorldEditInstallationChecker
+import com.magician.worldedit.client.screen.reusable.TabbedScrollablePanelScreen
 import net.minecraft.client.Minecraft
-import net.minecraft.client.gui.GuiGraphics
 import net.minecraft.client.gui.components.AbstractWidget
 import net.minecraft.client.gui.components.Button
 import net.minecraft.client.gui.components.EditBox
 import net.minecraft.client.gui.components.StringWidget
 import net.minecraft.client.gui.screens.Screen
 import net.minecraft.network.chat.Component
+import net.minecraft.network.chat.Style
 import net.minecraft.network.chat.TextColor
+import net.minecraft.util.FormattedCharSequence
 
-private enum class ConfigTab { AI_MODEL, AGENT, COMMANDS, WORLDEDIT }
+enum class ConfigTab { AI_MODEL, AGENT, COMMANDS, WORLDEDIT }
 
 /**
  * Unified WEMC settings panel — centered, scrollable, 4-tab design.
@@ -31,122 +34,57 @@ private enum class ConfigTab { AI_MODEL, AGENT, COMMANDS, WORLDEDIT }
  * Layout (fixed):
  *   y=0–64:   Header bar — title + tab buttons (fixed, always visible)
  *   y=72–H-36: Content panel — scrollable via mouse wheel; scrollbar shown when needed
- *   y=H-36–H: Bottom bar — Save / Cancel (fixed, always visible)
+ *   y=H-36–H: Bottom bar — Test / Save / Cancel (fixed, always visible)
  *
- * Rendering approach:
- *   - Background fills (header + content) are drawn BEFORE super.render()
- *     so the content panel covers any content-widget overflow below the panel.
- *   - Tab bar and bottom bar widgets are added first so super.render()
- *     draws them before content background covers the area.
- *   - After super.render(), we draw the content background (which covers
- *     content widgets that would overflow into the header area).
- *   - Finally we draw the scrollbar on top.
+ * Scroll implementation:
+ *   Uses LWJGL GL_SCISSOR_TEST to clip content rendering to the panel bounds.
+ *   Widgets are repositioned to scrollOffset when mouseScrolled fires.
+ *   Tab switching reopens the screen to rebuild content from y=0.
  */
 class WemcConfigPanelScreen(
     private val parent: Screen?,
     initialSettings: OpenAiSettings? = null,
     initialOpSettings: AgentOperationSettings? = null,
-    initialScrollOffset: Int = 0,
-) : Screen(TITLE) {
+    initialTab: ConfigTab = ConfigTab.AI_MODEL,
+    initialShowSecrets: Boolean = false,
+) : TabbedScrollablePanelScreen<ConfigTab>(TITLE, ConfigTab.entries.toList(), initialTab) {
 
     private var settings: OpenAiSettings = initialSettings ?: OpenAiSettingsStore.load()
     private var opSettings: AgentOperationSettings = initialOpSettings ?: AgentOperationSettingsStore.load()
-    private var activeTab: ConfigTab = ConfigTab.AI_MODEL
-    private var scrollOffset = initialScrollOffset
 
-    // Content widget fields (need to survive across init() calls for form values)
+    // Content widget fields
     private var modelField: EditBox? = null
     private var apiKeyField: EditBox? = null
     private var baseUrlField: EditBox? = null
     private var contextWindowField: EditBox? = null
     private var maxOutputTokensField: EditBox? = null
 
-    private var showSecrets = false
+    private var showSecrets = initialShowSecrets
     private var discoveredModels: List<String> = emptyList()
     private var statusMessage: String? = null
     private var statusIsError = false
     private var validationMessage: Component? = null
 
-    // Content widget Y positions (local to contentTopY)
-    private val contentWidgetYs = mutableListOf<Pair<AbstractWidget, Int>>()
-    private var totalContentHeight = 400
+    private val innerLeft get() = contentLeft
+    private val innerW get() = contentWidth
 
-    // Layout constants
-    private val panelWidth = 340
-    private val panelLeft: Int get() = (width - panelWidth) / 2
-    private val panelRight: Int get() = panelLeft + panelWidth
-
-    private val headerBottomY = 64
-    private val tabBarY = 32
-    private val tabButtonH = 22
-    private val tabButtonW = 80
-    private val tabGap = 4
-    private val tabRowWidth = ConfigTab.entries.size * tabButtonW + (ConfigTab.entries.size - 1) * tabGap
-    private val tabRowLeft: Int get() = (width - tabRowWidth) / 2
-
-    private val contentTopY get() = headerBottomY + 8
-    private val contentBottomY get() = height - 36
-    private val visibleContentH get() = contentBottomY - contentTopY
-    private val contentMargin = 12
-    private val innerLeft get() = panelLeft + contentMargin
-    private val innerRight get() = panelRight - contentMargin
-    private val innerW get() = innerRight - innerLeft
-
-    private val bottomBarY get() = height - 28
-    private val bottomBarH = 20
-
-    private val scrollbarW = 6
-    private val scrollbarTrackLeft get() = panelRight - scrollbarW - 2
-
-    // ── init ──────────────────────────────────────────────────────────────
-    override fun init() {
-        clearWidgets()
-        contentWidgetYs.clear()
-
-        // Tab bar widgets first (so they render before content background)
-        buildTabBar()
-        // Content widgets (added to renderables but positioned below contentTopY + scrollOffset)
-        buildContent()
-        // Bottom bar widgets last
-        buildBottomBar()
-    }
-
-    // ── Tab bar ──────────────────────────────────────────────────────────
-    private fun buildTabBar() {
-        ConfigTab.entries.forEach { tab ->
-            val idx = tab.ordinal
-            val x = tabRowLeft + idx * (tabButtonW + tabGap)
-            val isActive = tab == activeTab
-            val colour = if (isActive) 0xFF55FF55.toInt() else 0xFF888888.toInt()
-            val label = Component.literal(tabName(tab))
-                .withStyle { it.withColor(TextColor.fromRgb(colour)) }
-            addRenderableWidget(
-                Button.builder(label) { switchTab(tab) }
-                    .bounds(x, tabBarY, tabButtonW, tabButtonH).build()
-            )
+    override fun tabLabel(tab: ConfigTab): Component = Component.literal(
+        when (tab) {
+            ConfigTab.AI_MODEL -> "AI Model"
+            ConfigTab.AGENT -> "Agent"
+            ConfigTab.COMMANDS -> "Commands"
+            ConfigTab.WORLDEDIT -> "WorldEdit"
         }
-    }
+    )
 
-    private fun tabName(tab: ConfigTab): String = when (tab) {
-        ConfigTab.AI_MODEL -> "AI Model"
-        ConfigTab.AGENT -> "Agent"
-        ConfigTab.COMMANDS -> "Commands"
-        ConfigTab.WORLDEDIT -> "WorldEdit"
-    }
-
-    private fun switchTab(newTab: ConfigTab) {
-        if (activeTab == ConfigTab.AI_MODEL) settings = collectAiSettings()
-        activeTab = newTab
-        scrollOffset = 0
+    override fun beforeTabChange(from: ConfigTab, to: ConfigTab) {
+        if (from == ConfigTab.AI_MODEL) settings = collectAiSettings()
         statusMessage = null
         validationMessage = null
-        reopen()
     }
 
-    // ── Content builder ────────────────────────────────────────────────────
-    private fun buildContent() {
-        contentWidgetYs.clear()
-        when (activeTab) {
+    override fun buildPanelContent(tab: ConfigTab) {
+        when (tab) {
             ConfigTab.AI_MODEL -> buildAiModelTab()
             ConfigTab.AGENT -> buildAgentTab()
             ConfigTab.COMMANDS -> buildCommandsTab()
@@ -154,37 +92,21 @@ class WemcConfigPanelScreen(
         }
     }
 
-    private fun addContentWidget(w: AbstractWidget, localY: Int) {
-        // Set widget Y to be contentTopY + scrollOffset + localY
-        w.setPosition(w.x, contentTopY + scrollOffset + localY)
-        contentWidgetYs.add(w to localY)
-        addRenderableWidget(w)
+    private fun addContentWidget(widget: AbstractWidget, localY: Int) = addPanelWidget(widget, localY)
+
+    private fun addContentLabel(text: String, localY: Int, colour: Int = 0xFFCCCCCC.toInt()) {
+        addPanelLabel(Component.literal(text).withStyle { it.withColor(TextColor.fromRgb(colour)) }, localY)
     }
 
-    private fun addContentLabel(text: String, localY: Int) {
-        val w = StringWidget(Component.literal(text), font).apply {
-            setPosition(innerLeft, contentTopY + scrollOffset + localY)
-        }
-        contentWidgetYs.add(w to localY)
-        addRenderableWidget(w)
-    }
-
-    private fun addContentLabel(text: String, localY: Int, colour: Int) {
-        val w = StringWidget(
-            Component.literal(text).withStyle { it.withColor(TextColor.fromRgb(colour)) },
-            font
-        ).apply {
-            setPosition(innerLeft, contentTopY + scrollOffset + localY)
-        }
-        contentWidgetYs.add(w to localY)
-        addRenderableWidget(w)
+    private fun addContentLabel(text: String, x: Int, localY: Int, colour: Int = 0xFFCCCCCC.toInt()) {
+        addPanelLabel(Component.literal(text).withStyle { it.withColor(TextColor.fromRgb(colour)) }, x, localY)
     }
 
     // ═══════════════════════════════════════════════════════════════════════
     // Tab 1 — AI Model
     // ═══════════════════════════════════════════════════════════════════════
     private fun buildAiModelTab() {
-        var y = 0
+        var y = panelFirstRowY
         var totalH = 0
 
         // Provider
@@ -195,18 +117,33 @@ class WemcConfigPanelScreen(
         // Model
         addContentLabel("Model", y); y += 14; totalH += 14
         modelField = EditBox(font, innerLeft, y, innerW - 100, 18, Component.literal("")).apply {
-            value = selectedModel(); setMaxLength(16384)
+            setMaxLength(16_384)
+            value = selectedModel()
         }
         addContentWidget(modelField!!, y)
         addContentWidget(Button.builder(Component.literal("Load")) { loadModels() }.bounds(innerLeft + innerW - 96, y, 44, 18).build(), y)
         addContentWidget(Button.builder(Component.literal("Next")) { nextModel() }.bounds(innerLeft + innerW - 48, y, 44, 18).build(), y)
         y += 24; totalH += 24
 
+        // Approval
+        addContentLabel("Approval", y); y += 14; totalH += 14
+        addContentWidget(Button.builder(approvalLabel(settings.approvalMode)) { cycleApproval() }
+            .bounds(innerLeft, y, innerW, 20).build(), y); y += 24; totalH += 24
+
         // API Key
         addContentLabel("API Key", y); y += 14; totalH += 14
         val keyFw = if (showSecrets) innerW - 52 else innerW - 48
         apiKeyField = EditBox(font, innerLeft, y, keyFw, 18, Component.literal("")).apply {
-            value = currentApiKey(); setMaxLength(16384); setHint(Component.literal(keyHint()))
+            // EditBox defaults to 32 characters. Configure the limit before
+            // assigning the persisted key so loading cannot truncate it.
+            setMaxLength(512)
+            value = currentApiKey()
+            setHint(Component.literal(keyHint()))
+            if (!showSecrets) {
+                addFormatter { value, _ ->
+                    FormattedCharSequence.forward("•".repeat(value.length), Style.EMPTY)
+                }
+            }
         }
         addContentWidget(apiKeyField!!, y)
         addContentWidget(
@@ -217,32 +154,28 @@ class WemcConfigPanelScreen(
         // Base URL
         addContentLabel("Base URL", y); y += 14; totalH += 14
         baseUrlField = EditBox(font, innerLeft, y, innerW, 18, Component.literal("")).apply {
-            value = currentBaseUrl(); setMaxLength(16384); setHint(Component.literal(urlHint()))
+            setMaxLength(16_384)
+            value = currentBaseUrl()
+            setHint(Component.literal(urlHint()))
         }
         addContentWidget(baseUrlField!!, y); y += 24; totalH += 24
 
-        // Context | Max Output
-        addContentLabel("Context", y); y += 14; totalH += 14
-        contextWindowField = EditBox(font, innerLeft, y, 110, 18, Component.literal("")).apply {
-            value = settings.contextWindow.toString(); setMaxLength(16384)
+        // Context Window | Max Output (two independent columns)
+        val columnGap = 12
+        val columnWidth = (innerW - columnGap) / 2
+        addContentLabel("Context Window", innerLeft, y)
+        addContentLabel("Max Output", innerLeft + columnWidth + columnGap, y)
+        y += 14; totalH += 14
+        contextWindowField = EditBox(font, innerLeft, y, columnWidth, 18, Component.literal("")).apply {
+            setMaxLength(16_384)
+            value = settings.contextWindow.toString()
         }
         addContentWidget(contextWindowField!!, y)
-        addContentLabel("Max Output", y - 14)
-        maxOutputTokensField = EditBox(font, innerLeft + 122, y, 110, 18, Component.literal("")).apply {
-            value = settings.maxOutputTokens.toString(); setMaxLength(16384)
+        maxOutputTokensField = EditBox(font, innerLeft + columnWidth + columnGap, y, columnWidth, 18, Component.literal("")).apply {
+            setMaxLength(16_384)
+            value = settings.maxOutputTokens.toString()
         }
         addContentWidget(maxOutputTokensField!!, y); y += 24; totalH += 24
-
-        // Approval
-        addContentLabel("Approval", y); y += 14; totalH += 14
-        addContentWidget(Button.builder(approvalLabel(settings.approvalMode)) { cycleApproval() }
-            .bounds(innerLeft, y, innerW, 20).build(), y); y += 24; totalH += 24
-
-        // Test Connection
-        addContentWidget(
-            Button.builder(Component.literal("Test Connection")) { testConnection() }
-                .bounds(innerLeft, y, innerW, 22).build(), y)
-        y += 26; totalH += 26
 
         // Status
         statusMessage?.let {
@@ -250,14 +183,14 @@ class WemcConfigPanelScreen(
             y += 16; totalH += 16
         }
 
-        totalContentHeight = totalH.coerceAtLeast(visibleContentH)
+        setPanelContentHeight(y)
     }
 
     // ═══════════════════════════════════════════════════════════════════════
     // Tab 2 — Agent
     // ═══════════════════════════════════════════════════════════════════════
     private fun buildAgentTab() {
-        var y = 0
+        var y = panelFirstRowY
         var totalH = 0
 
         // Thinking Mode
@@ -270,6 +203,19 @@ class WemcConfigPanelScreen(
         addContentWidget(
             Button.builder(Component.literal(tDisplay).withStyle { it.withColor(TextColor.fromRgb(tColour)) })
                 { cycleThinkingMode() }.bounds(innerLeft, y, innerW, 20).build(), y)
+        y += 24; totalH += 24
+
+        // Flow mode
+        addContentLabel("Flow Mode", y); y += 14; totalH += 14
+        val flowEnabled = opSettings.mode == AgentOperationMode.FLOW
+        addContentWidget(
+            Button.builder(
+                Component.literal(
+                    if (flowEnabled) "[ON]  Multi-step flow enabled" else "[OFF] Single-request mode",
+                ).withStyle {
+                    it.withColor(TextColor.fromRgb(if (flowEnabled) 0xFF55FF55.toInt() else 0xFFFF5555.toInt()))
+                },
+            ) { toggleFlowMode() }.bounds(innerLeft, y, innerW, 20).build(), y)
         y += 24; totalH += 24
 
         // Effort (only when thinking is not OFF)
@@ -326,14 +272,14 @@ class WemcConfigPanelScreen(
                 .bounds(innerLeft, y, innerW, 20).build(), y)
         y += 24; totalH += 24
 
-        totalContentHeight = totalH.coerceAtLeast(visibleContentH)
+        setPanelContentHeight(y)
     }
 
     // ═══════════════════════════════════════════════════════════════════════
     // Tab 3 — Commands
     // ═══════════════════════════════════════════════════════════════════════
     private fun buildCommandsTab() {
-        var y = 0
+        var y = panelFirstRowY
         var totalH = 0
 
         addContentLabel("Toggle categories to allow or block them from the agent.", y, 0xFF888888.toInt())
@@ -344,7 +290,7 @@ class WemcConfigPanelScreen(
             addContentWidget(
                 Button.builder(labelForCategory(category, enabled)) {
                     MinecraftCommandWhitelist.setCategoryEnabled(category, !enabled)
-                    buildContent()
+                    rebuildScreen()
                 }.bounds(innerLeft, y, innerW, 18).build(), y)
             y += 22; totalH += 22
         }
@@ -356,14 +302,14 @@ class WemcConfigPanelScreen(
                 .bounds(innerLeft, y, innerW, 20).build(), y)
         y += 24; totalH += 24
 
-        totalContentHeight = totalH.coerceAtLeast(visibleContentH)
+        setPanelContentHeight(y)
     }
 
     // ═══════════════════════════════════════════════════════════════════════
     // Tab 4 — WorldEdit
     // ═══════════════════════════════════════════════════════════════════════
     private fun buildWorldEditTab() {
-        var y = 0
+        var y = panelFirstRowY
         var totalH = 0
 
         addContentLabel("This mod requires the following server-side mods:", y, 0xFFAAAAAA.toInt())
@@ -403,87 +349,28 @@ class WemcConfigPanelScreen(
             }.bounds(innerLeft, y, innerW, 20).build(), y)
         y += 24; totalH += 24
 
-        totalContentHeight = totalH.coerceAtLeast(visibleContentH)
+        setPanelContentHeight(y)
     }
 
-    // ── Bottom bar ────────────────────────────────────────────────────────
-    private fun buildBottomBar() {
+    // ── Bottom actions ────────────────────────────────────────────────────
+    override fun buildBottomActions() {
+        if (activeTab == ConfigTab.AI_MODEL) {
+            addRenderableWidget(
+                Button.builder(Component.literal("Test")) { testConnection() }
+                    .bounds(panelRight - 244, bottomBarY, 52, bottomBarHeight).build()
+            )
+        }
         if (activeTab != ConfigTab.WORLDEDIT) {
             addRenderableWidget(
                 Button.builder(SAVE_LABEL) { saveAll() }
-                    .bounds(panelRight - 160, bottomBarY, 76, bottomBarH).build()
+                    .bounds(panelRight - 184, bottomBarY, 76, bottomBarHeight).build()
             )
         }
         addRenderableWidget(
             Button.builder(CANCEL_LABEL) { onClose() }
-                .bounds(panelRight - 76, bottomBarY, 72, bottomBarH).build()
+                .bounds(panelRight - 76, bottomBarY, 72, bottomBarHeight).build()
         )
     }
-
-    // ── Rendering ─────────────────────────────────────────────────────────
-    override fun render(graphics: GuiGraphics, mouseX: Int, mouseY: Int, delta: Float) {
-        // 1. Header background (full width, top area)
-        graphics.fill(0, 0, width, headerBottomY, 0xCC101010.toInt())
-        graphics.drawCenteredString(font, Component.literal("WEMC Config"), width / 2, 10, 0xFFFFFFFF.toInt())
-        graphics.fill(0, headerBottomY, width, headerBottomY + 1, 0xFF303030.toInt())
-
-        // 2. Content panel background (covers entire panel area including scrollable content)
-        graphics.fill(panelLeft, contentTopY, panelRight, contentBottomY, 0xCC181818.toInt())
-
-        // 3. Super render — draws ALL widgets in addRenderableWidget order.
-        //    Since tab bar and bottom bar were added BEFORE content,
-        //    they render first. Content widgets render on top (correct).
-        super.render(graphics, mouseX, mouseY, delta)
-
-        // 4. Content panel RIGHT mask — draws scrollbar track + covers any content overflow
-        val maxScroll = maxScrollOffset()
-        graphics.fill(scrollbarTrackLeft, contentTopY, scrollbarTrackLeft + scrollbarW, contentBottomY, 0xFF252525.toInt())
-
-        // 5. Content panel BOTTOM mask — ensures bottom edge is clean
-        graphics.fill(panelLeft, contentBottomY, panelRight - scrollbarW, contentBottomY + 2, 0xFF101010.toInt())
-
-        // 6. Scrollbar thumb
-        if (maxScroll < 0) {
-            val totalContent = totalContentHeight
-            val visibleContent = visibleContentH
-            val barH = (visibleContent.toFloat() / totalContent.coerceAtLeast(1) * visibleContent).toInt().coerceAtLeast(30)
-            val scrollFrac = (-scrollOffset.toFloat() / maxScroll).coerceIn(0f, 1f)
-            val barY = contentTopY + (scrollFrac * (visibleContent - barH)).toInt()
-            graphics.fill(scrollbarTrackLeft, barY, scrollbarTrackLeft + scrollbarW, (barY + barH).coerceAtMost(contentBottomY), 0xFF606060.toInt())
-        }
-
-        // 7. Validation message
-        validationMessage?.let {
-            graphics.drawCenteredString(font, it, width / 2, bottomBarY - 14, 0xFFFF5555.toInt())
-        }
-    }
-
-    // ── Mouse input ──────────────────────────────────────────────────────
-    override fun mouseScrolled(mouseX: Double, mouseY: Double, horizontalAmount: Double, verticalAmount: Double): Boolean {
-        if (mouseY < contentTopY || mouseY > contentBottomY) return false
-        val maxScroll = maxScrollOffset()
-        if (maxScroll >= 0) return false
-        val next = (scrollOffset + (verticalAmount * 18).toInt()).coerceIn(maxScroll, 0)
-        if (next == scrollOffset) return false
-        scrollOffset = next
-        // Reposition content widgets
-        for ((widget, localY) in contentWidgetYs) {
-            widget.setPosition(widget.x, contentTopY + scrollOffset + localY)
-        }
-        return true
-    }
-
-    private fun scrollbarThumb(): Pair<Int, Int> {
-        val maxScroll = maxScrollOffset()
-        val totalContent = totalContentHeight
-        val visibleContent = visibleContentH
-        val barH = (visibleContent.toFloat() / totalContent.coerceAtLeast(1) * visibleContent).toInt().coerceAtLeast(30)
-        val scrollFrac = (-scrollOffset.toFloat() / maxScroll).coerceIn(0f, 1f)
-        val barY = contentTopY + (scrollFrac * (visibleContent - barH)).toInt()
-        return barY to (barY + barH)
-    }
-
-    private fun maxScrollOffset(): Int = (visibleContentH - totalContentHeight).coerceAtLeast(0)
 
     override fun onClose() {
         Minecraft.getInstance().setScreen(parent)
@@ -493,14 +380,19 @@ class WemcConfigPanelScreen(
     private fun reopen(
         nextSettings: OpenAiSettings = settings,
         nextOpSettings: AgentOperationSettings = opSettings,
-        nextScrollOffset: Int = scrollOffset,
         message: String? = null,
         isError: Boolean = false,
     ) {
         statusMessage = message
         statusIsError = isError
         Minecraft.getInstance().setScreen(
-            WemcConfigPanelScreen(parent, nextSettings, nextOpSettings, nextScrollOffset)
+            WemcConfigPanelScreen(
+                parent = parent,
+                initialSettings = nextSettings,
+                initialOpSettings = nextOpSettings,
+                initialTab = activeTab,
+                initialShowSecrets = showSecrets,
+            )
         )
     }
 
@@ -578,6 +470,7 @@ class WemcConfigPanelScreen(
     }
 
     private fun toggleSecrets() {
+        settings = collectAiSettings()
         showSecrets = !showSecrets
         reopen()
     }
@@ -604,6 +497,16 @@ class WemcConfigPanelScreen(
             ExtendedThinkingMode.ON -> ExtendedThinkingMode.OFF
         }
         opSettings = opSettings.copy(extendedThinking = next)
+        reopen()
+    }
+
+    private fun toggleFlowMode() {
+        val nextMode = if (opSettings.mode == AgentOperationMode.FLOW) {
+            AgentOperationMode.SINGLE
+        } else {
+            AgentOperationMode.FLOW
+        }
+        opSettings = opSettings.copy(mode = nextMode)
         reopen()
     }
 
@@ -733,6 +636,7 @@ class WemcConfigPanelScreen(
         runCatching {
             OpenAiSettingsStore.save(settings)
             AgentOperationSettingsStore.save(opSettings)
+            WorldeditMagicianClient.onAgentOperationSettingsSaved(opSettings)
             onClose()
         }.onFailure {
             validationMessage = Component.literal(it.message ?: "Save failed.")

@@ -16,6 +16,22 @@ import kotlin.test.assertTrue
  *   - The compact player-state placeholder stays within a small token budget
  */
 class SessionAndSystemPromptTest {
+    @Test
+    fun `compact orientation names cardinal direction and vertical aim`() {
+        assertEquals("S(+Z),level", PlayerStateShortEncoder.orientationLabel(0f, 0f))
+        assertEquals("W(-X),up", PlayerStateShortEncoder.orientationLabel(90f, -60f))
+        assertEquals("N(-Z),down", PlayerStateShortEncoder.orientationLabel(180f, 60f))
+        assertEquals("E(+X),level", PlayerStateShortEncoder.orientationLabel(270f, 0f))
+    }
+
+    @Test
+    fun `player state placeholder includes facing and rotation fields`() {
+        val placeholder = PlayerStateShortEncoder.PLACEHOLDER
+        assertTrue(placeholder.contains("face="))
+        assertTrue(placeholder.contains("yaw="))
+        assertTrue(placeholder.contains("pitch="))
+    }
+
 
     @Test
     fun `system prompt is stable across calls for prompt cache anchoring`() {
@@ -30,9 +46,10 @@ class SessionAndSystemPromptTest {
     @Test
     fun `system prompt embeds the whitelist and planning rules`() {
         val prompt = WemcSystemPrompt.build(OpenAiSettings())
-        assertTrue(prompt.contains("wemc-commands"), "Prompt should describe the wemc-commands format")
-        assertTrue(prompt.contains("Prefer one-shot"),
-            "Prompt should bias the agent toward one-shot commands")
+        assertTrue(prompt.contains("```wcl"), "Prompt should require the WCL fence")
+        assertTrue(prompt.contains("i in [0..N]"), "Prompt should document the native WCL loop grammar")
+        assertTrue(prompt.contains("multi-line WCL program"),
+            "Prompt should describe WCL as a multi-line program rather than a command list")
         assertTrue(prompt.contains("Planning rules"),
             "Prompt should embed the planning rules")
     }
@@ -115,17 +132,15 @@ class SessionAndSystemPromptTest {
         assertTrue(placeholder.startsWith("@s"))
         assertTrue(placeholder.contains("|"))
         assertTrue(placeholder.contains("("))
-        assertTrue(placeholder.length < 40, "Placeholder should stay short, was ${placeholder.length}")
+        assertTrue(placeholder.length < 100, "Placeholder should stay compact, was ${placeholder.length}")
     }
 
     @Test
     fun `placeholder has the documented compact shape`() {
         val placeholder = PlayerStateShortEncoder.PLACEHOLDER
-        // Exactly one '@' anchor, one '|' separator, one '(' chunk label, balanced ')'.
         assertEquals(1, placeholder.count { it == '@' }, "exactly one @ anchor")
-        assertEquals(1, placeholder.count { it == '|' }, "exactly one | separator")
-        assertEquals(1, placeholder.count { it == '(' }, "exactly one ( chunk label")
-        assertTrue(placeholder.endsWith(")"))
+        assertEquals(2, placeholder.count { it == '|' }, "position and orientation separators")
+        assertEquals("@s 0,64,0|over(0,0)|face=S(+Z),level,yaw=0,pitch=0", placeholder)
     }
 
     @Test

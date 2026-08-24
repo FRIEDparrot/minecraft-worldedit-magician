@@ -101,15 +101,13 @@ class WclCompiler(private val prog: WclProgram) {
                 val end = evalLong(s.end, ctx, scope)
                 val step = s.step?.let { evalLong(it, ctx, scope) } ?: 1L
                 val dir = if (step >= 0) 1L else -1L
-                var count = 0
-                val maxIters = kotlin.math.abs((end - i) / step) + 1
+                val maxIters = if (step == 0L) 0L else kotlin.math.abs((end - i) / step) + 1
                 if (maxIters > MAX * 10) throw CErr("Loop too large (${maxIters} iterations).")
                 while (dir * i <= dir * end) {
                     scope[s.variable] = i
                     execStmts(s.body, ctx, scope, out, echoes)
                     i += step
-                    count++
-                    if (count > MAX) throw CErr("Loop exceeded MAX_COMMANDS ($MAX).")
+                    if (out.size >= MAX) throw CErr("Loop exceeded MAX_COMMANDS ($MAX).")
                 }
             }
             is WclStmt.LoopEnum -> {

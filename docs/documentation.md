@@ -6,10 +6,10 @@
 |---|---|
 | Selection torch controls | [§1 Selection tool](#1-selection-tool) |
 | All `/wemc …` and `/worldeditmagician …` subcommands | [§2 Commands](#2-commands) |
-| The agent protocol: `wemc-commands`, `wemc-plan`, `<eof>`, WCL | [§3 Agent protocol](#3-agent-protocol) |
+| The agent protocol: `wcl`, `wemc-plan`, `<eof>` | [§3 Agent protocol](#3-agent-protocol) |
 | Operation modes (SINGLE vs FLOW) | [§4 Operation modes](#4-operation-modes) |
 | Approval modes and the pending queue | [§5 Approval & execution](#5-approval--execution) |
-| The whitelisted command manifest | [§6 Whitelisted commands](#6-whitelisted-commands) |
+| Command catalog and post-compile blacklist gate | [§6 Command catalog and blacklist gate](#6-command-catalog-and-blacklist-gate) |
 | Chunk / Y-range guard | [§7 Selection guard](#7-selection-guard) |
 | Settings UI (`/wemc config`) | [§8 Settings screens](#8-settings-screens) |
 | AI providers & models | [§9 Providers & models](#9-providers--models) |
@@ -155,27 +155,30 @@ A legacy alias kept for backward compatibility:
 
 WEMC does not free-form the model. Every prompt the agent sees already contains:
 
-1. The full whitelisted command manifest, grouped by category.
-2. A `Player state:` block with the player's position, rotation, looking-at block, current chunk, selection mode/operation, Y range, and selected-chunk count (`PlayerStateContext.currentPlayerState()`).
+1. A command catalog for guidance plus the post-compile blacklist policy.
+2. A compact per-turn player-state prefix with position, dimension/chunk, yaw, pitch, horizontal cardinal/intercardinal facing, and vertical aim; plus the richer player-state details available to the client.
 3. Mode-specific instructions (`AgentStepPlanningPrompt.instructions`).
 
 The agent replies in one of the formats below.
 
-### 3.1 `wemc-commands` (raw command list)
+### 3.1 `wcl` (the only executable agent format)
 
-The transport used by the live client. The agent emits **one Minecraft command per line**:
+In both SINGLE and FLOW mode, the agent emits one complete, multi-line WCL program. WEMC compiles it to concrete Minecraft commands before validating or executing anything.
 
 ````
-```wemc-commands
-time set noon
+```wcl
+i in [0..9] {
+  summon minecraft:creeper ~<random(-6,6)> ~ ~<random(-6,6)>
+}
 ```
 ````
 
-- The block is parsed by `MinecraftCommandWhitelist.extractAgentSequence`.
-- Every command is validated against the manifest, normalized (no leading `/`, no embedded newlines), and sent through `MinecraftCommandExecutor.execute`.
-- A batch is capped at **100 commands** (`MAX_SEQUENCE_LENGTH`); larger work must be planned as a separate flow.
-- Block-changing commands (`setblock`, `fill`, `clone`, block-targeted `data`/`item` edits) must pass the [chunk/Y-range guard](#7-selection-guard).
-- The transport block itself is stripped from the chat message the player sees — `AgentResponsePresentation.displayText`.
+- `wcl` source is never sent to Minecraft directly.
+- `WclPipeline` expands loops and random values, then produces concrete Minecraft commands.
+- `MinecraftCommandBlacklist` validates only that compiler output; WCL itself accepts arbitrary Minecraft and modded roots.
+- Compiled sequences are capped at **1,000 commands**.
+- The WCL source and compiled command count are visible through `/wemc command wcl-history`; `/wemc command history` keeps the 100 most recent commands actually sent to the server.
+- The fence itself is stripped from normal chat display; enable Debug Mode to see the raw provider response.
 
 ### 3.2 `wemc-plan` (FLOW mode)
 
@@ -195,34 +198,22 @@ current-step: 1
 - `reason` — required when `requires-flow: true`.
 - `current-step` — optional, defaults to `1`; must be in `1..steps`.
 
-The parser is in `AgentStepPlanParser`. A plan-only response transitions the controller to `AWAITING_PLAN_APPROVAL`; you accept with `/wemc flow approve` or reject with `/wemc flow cancel`.
+A plan-only response transitions the controller to `AWAITING_PLAN_APPROVAL`; accept with `/wemc flow approve` or reject with `/wemc flow cancel`.
 
-**Plan with bundled commands** — If the agent's response contains both `wemc-plan` AND `wemc-commands` (the first step's commands), the commands are **held pending** until you approve. On approval the first batch executes immediately without waiting for another agent round-trip. If you reject, the held commands are discarded.
+**Plan with bundled WCL** — If the agent returns both `wemc-plan` and `wcl`, the first WCL program is held until approval. On approval it is compiled and then executed; no raw command list is stored or executed.
 
 ### 3.3 `<eof>` (end of flow)
 
-A line containing **only** `<eof>` (optional whitespace) tells the FLOW controller that the next `wemc-commands` block is the last one. The flow ends after it executes.
+A line containing **only** `<eof>` marks the preceding `wcl` program as the last FLOW step. The flow ends after the compiled commands execute.
 
-In **plan mode** (`wemc-plan`): the controller strips `<eof>` before displaying the plan text, so you only see the plan description without the `<eof>` marker.
+### 3.4 Plain text / empty
 
-### 3.4 `wemc` (WCL — partial implementation)
+Anything else ends the flow. In SINGLE mode a plain-text reply never executes anything — only a `wcl` block can produce commands.
 
-````
-```wemc
-// WCL source code here
-```
-````
-
-The FLOW parser recognises this block as `FlowParseResult.WclSource` and the controller maps it to `AgentFlowAction.WclReady` / `WclCompilationFailed`, but **the live client (`WorldeditMagicianClient.handleFlowAction`) does not yet wire a compiler** — it falls through the `else -> { }` branch. The grammar, lexer, parser, type-checker, and compiler are described in `docs/wcl-spec.md` and the test `AgentFlowTest.`FlowResponseParser parses wemc block as WclSource`` proves the parser path works. Treat the `wemc` block as **planned but not yet executable** in the live client; use `wemc-commands` for now.
-
-### 3.5 Plain text / empty
-
-Anything else ends the flow. In SINGLE mode a plain-text reply never executes anything — only `wemc-commands` blocks can ship commands.
-
-### 3.6 Hard limits (FLOW mode)
+### 3.5 Hard limits (FLOW mode)
 
 | Limit | Default | Cap |
-|---|---|---|
+|---|---:|---:|
 | Max AI requests per flow | 30 | 30 |
 | Max server steps per flow | 50 | 50 |
 | Query timeout per step | 8 s (× 2 with extended thinking) | 20 s |
@@ -237,7 +228,7 @@ If a limit is exceeded the flow fails with a chat message naming the limit.
 ### 4.1 SINGLE
 
 - Exactly one AI request per `/wemc chat`.
-- The reply can include `wemc-commands`; they go straight to [§5 Approval & execution](#5-approval--execution).
+- The reply must contain one `wcl` program; it goes through compilation and [§5 Approval & execution](#5-approval--execution).
 - No automatic continuation: if the agent needs the result of its commands to plan the next step, you must switch to FLOW mode. The agent is told this in its mode-specific instructions.
 
 ### 4.2 FLOW (default)
@@ -246,7 +237,7 @@ If a limit is exceeded the flow fails with a chat message naming the limit.
 - Plans are gated by **your** `/wemc flow approve` (the only approval gate).
 - If the plan response includes the first step's commands, they execute **immediately on approval** — no extra agent round-trip needed to start.
 - After each step the controller waits for server messages (500 ms quiet window), feeds them back to the agent, and asks for the next step.
-- A single, plan-free `wemc-commands` block in FLOW mode executes immediately without a plan-approval gate.
+- A single, plan-free `wcl` block in FLOW mode compiles and executes immediately without a plan-approval gate.
 
 ---
 
@@ -254,16 +245,16 @@ If a limit is exceeded the flow fails with a chat message naming the limit.
 
 `ApprovalMode` lives in `OpenAiSettings`:
 
-|| Value | Behavior when the agent emits `wemc-commands` ||
+||| Value | Behavior when the agent emits `wcl` ||
 |---|---|---|
 | `ASK` (default) | Commands are validated, then parked in `MinecraftCommandExecutor.pendingCommands`. You review with `/wemc agent commands`, then either `/wemc agent run` (send them all) or `/wemc agent discard` (drop them). ||
 | `APPROVE` | Commands are validated and sent immediately. Nothing is queued. ||
 
-**Plan-bundled commands** (FLOW mode only): when `wemc-plan` and `wemc-commands` appear together, the commands are held in the controller as `pendingPlanCommands` and execute immediately on `/wemc flow approve` — they **do not** enter the ASK approval queue and do not need a separate `/wemc agent run` step.
+**Plan-bundled WCL** (FLOW mode only): when `wemc-plan` and `wcl` appear together, the WCL source is held in the controller and compiled on `/wemc flow approve` — it does not enter the ASK approval queue and does not need a separate `/wemc agent run` step.
 
 Either way the executor applies the same checks before the command is delivered:
 
-1. **`MinecraftCommandWhitelist.validateSequence`** — root verb must be on the whitelist, must match an enabled category's validator, must not exceed 100 commands per batch.
+1. **`MinecraftCommandBlacklist.validateSequence`** — compiled commands pass unless they are explicit server/admin, persistence, function/schedule, command-block, or network-management controls; the compiled batch may not exceed 1,000 commands.
 2. **`ChunkSelectionCommandGuard.validate`** — block-changing commands are checked against the confirmed chunk set and the configured Y range.
 3. The command is sent through `Player.connection.sendCommand` (the active server connection). WEMC never mutates the client `Level` directly.
 4. The executed command is appended to `ExecutedCommandHistory` and is visible via `/wemc command history`.
@@ -272,9 +263,9 @@ If any check fails the executor returns a one-line human-readable reason (the ex
 
 ---
 
-## 6. Whitelisted commands
+## 6. Command catalog and blacklist gate
 
-The whitelist is a closed list (`MinecraftCommandWhitelist.definitions`) grouped into seven categories, each toggleable in **Config → Commands**. Every entry was checked against the Minecraft Wiki before inclusion; `wikiSource` is kept on the definition for traceability.
+The command catalog (`MinecraftCommandWhitelist.definitions`) is guidance for the agent UI, grouped into seven categories. It is not a closed execution allow-list. WCL can compile any Minecraft or modded command root; after compilation, `MinecraftCommandBlacklist` blocks only explicit server/admin, persistence, function/schedule, command-block, and network-management controls. The server remains the final syntax and permission authority.
 
 ### 6.1 Categories
 
@@ -488,7 +479,7 @@ The mod uses SLF4J under the namespace `worldedit-magician` for mod-init logging
 
 ### 10.8 Common false-alarm causes
 
-- "The agent said nothing" — it returned plain text with no `wemc-commands` block. That is **not** an error; only `wemc-commands` blocks can produce commands. Re-prompt with a more concrete request.
+- "The agent said nothing" — it returned plain text with no `wcl` block. That is **not** an error; only `wcl` blocks can produce commands. Re-prompt with a more concrete request.
 - "The agent's command was rejected" — the command was on a category that is disabled, or the verb is not on the whitelist. `/wemc command list` is the source of truth.
 - "My chunk selection was ignored" — the orange draft is not enough; you must right-click with the torch to confirm. Pending drafts do not authorize commands.
 - "I configured a custom base URL but credentials show up in the URL" — credentials are sent in headers, but the URL itself is logged by the provider. The mod never puts credentials in the URL.
@@ -585,8 +576,8 @@ All bindings are also reachable via the in-game Controls menu.
 What happens:
 
 1. The agent receives your prompt, the player-state block, the whitelist, and the SINGLE-mode instructions.
-2. The reply contains `\```wemc-commands\ntime set noon\n\```\` and plain text ("Set time to noon.").
-3. The `wemc-commands` block is stripped before display — **no agent text appears in chat**.
+2. The reply contains `\```wcl\ntime set noon\n\```\` and plain text ("Set time to noon.").
+3. The `wcl` block is stripped before display — **no agent text appears in chat**.
 4. The executor validates `time set noon` against the whitelist (`WORLD_STATE`, `time set …`), the chunk guard ignores it (not a block-edit), and `connection.sendCommand("time set noon")` is called.
 5. The executor prints `Sent 1 command(s).` — **this is the only chat message** (unless execution fails, in which case the rejection reason is shown).
 6. `ExecutedCommandHistory.record("time set noon")`. `/wemc command history` now shows it.
@@ -600,19 +591,19 @@ What happens:
 
 What happens:
 
-1. The agent returns a `wemc-plan` block with `steps: 3`, a reason, AND a bundled `wemc-commands` block containing step 1's commands.
+1. The agent returns a `wemc-plan` block with `steps: 3`, a reason, AND a bundled `wcl` block containing step 1's WCL program.
 2. Chat shows the plan description (plain text, `<eof>` stripped), then:
    - `[WEMC] Plan proposed (3 steps): …`
    - `[WEMC] First batch (N commands) will execute on approval.`
    - `[WEMC] Use /wemc flow approve to accept, /wemc flow cancel to reject.`
 3. You run `/wemc flow approve`. The controller executes the bundled step-1 commands **immediately** — no extra agent round-trip.
 4. Server responses are collected; after the 500 ms quiet window they are sent back to the agent as context.
-5. The agent returns step 2 (`\```wemc-commands\n…\n\```\`). Commands execute. Same monitoring loop.
+5. The agent returns step 2 (`\```wcl\n…\n\```\`). WCL compiles and commands execute. Same monitoring loop.
 6. After the last step it includes `<eof>` on its own line. The flow ends with `[WEMC] Flow finished — N command(s) executed.`
 
 ### B.3 Disabled category rejection
 
-You disabled the **Entity** category in **Config → Commands**. You ask the agent to `summon a zombie`. The agent emits a `wemc-commands` block with `summon minecraft:zombie ~ ~ ~`. The whitelist rejects it because no `summon` definition is enabled. Chat shows `Command sequence rejected: Command 1: 'summon' is disabled by command permissions (Entity). Open /wemc config to enable its category.` Re-enable Entity and try again.
+You disabled the **Entity** category in **Config → Commands**. You ask the agent to `summon a zombie`. The agent emits a `wcl` block with `summon minecraft:zombie ~ ~ ~`. The compiled command is rejected because no `summon` definition is enabled. Chat shows `Command sequence rejected: Command 1: 'summon' is disabled by command permissions (Entity). Open /wemc config to enable its category.` Re-enable Entity and try again.
 
 ### B.4 Block-edit blocked by selection guard
 

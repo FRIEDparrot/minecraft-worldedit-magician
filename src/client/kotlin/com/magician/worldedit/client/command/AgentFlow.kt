@@ -8,15 +8,15 @@ import com.magician.worldedit.client.command.AgentFlowController.FlowState
  *
  * BLOCKS:
  * - wemc-plan       → plan-only = ask user to approve/reject
- * - wemc-commands   → command(s) to execute; auto-executed in FLOW mode (no per-step approval)
+ * - wcl             → WCL program compiled to command(s) and auto-executed in FLOW mode
  * - <eof>           → on its own line = flow is finished
  *
  * RESPONSE TYPES (in FLOW mode):
- * 1. wemc-plan ONLY (no wemc-commands) → AwaitPlanApproval → user approves → next response should have commands
- * 2. wemc-commands (no wemc-plan)      → Execute commands, monitor, then feed back server responses
- * 3. wemc-commands + <eof>              → Execute commands, end flow
+ * 1. wemc-plan ONLY (no wcl) → AwaitPlanApproval → user approves → next response should have WCL
+ * 2. wcl (no wemc-plan)      → Compile and execute commands, monitor, then feed back server responses
+ * 3. wcl + <eof>             → Compile and execute commands, end flow
  * 4. Plain text (no blocks)             → Display, end flow
- * 5. wemc-commands + plain text + <eof> → Execute commands, display text, end flow
+ * 5. wcl + plain text + <eof> → Compile and execute commands, display text, end flow
  * 6. Empty / whitespace                 → End flow silently
  *
  * APPROVAL:
@@ -30,8 +30,9 @@ sealed interface FlowParseResult {
     data class PlanOnly(
         val steps: Int,
         val reason: String,
-        /** Commands bundled with the plan (first step), held until approval. Empty if plan-only. */
-        val pendingPlanCommands: List<String> = emptyList(),
+        /** First WCL program bundled with the plan, held until approval. */
+        val pendingPlanWcl: String? = null,
+        val pendingPlanIsEof: Boolean = false,
         /** Stripped text outside the plan block. */
         val displayText: String? = null,
     ) : FlowParseResult
@@ -40,29 +41,19 @@ sealed interface FlowParseResult {
      * Agent provided WCL (WEMC Command Language) code to be compiled and executed.
      * The wclSource contains the raw WCL text.
      */
-    data class WclSource(val wclSource: String, val displayText: String?) : FlowParseResult
-
-    /**
-     * Agent provided raw commands to execute (direct /command syntax).
-     * If isEof=true, this was the last step.
-     */
-    data class Commands(val commands: List<String>, val isEof: Boolean, val plainText: String?) : FlowParseResult
+    data class WclSource(val wclSource: String, val displayText: String?, val isEof: Boolean) : FlowParseResult
 
     /** Agent said something with no commands and no plan — end the flow. */
     data class EndFlow(val plainText: String?) : FlowParseResult
-
-    data class WclError(val errorReport: String) : FlowParseResult
 
     data class Invalid(val message: String) : FlowParseResult
 }
 
 /** Parses a FLOW-mode agent response into one of the above categories. */
 object FlowResponseParser {
-    // Matches ```wemc-commands ... ``` (DOTALL so it spans newlines)
-    private val COMMAND_BLOCK = Regex("""(?s)```wemc-commands\s*\n(.*?)```""", RegexOption.IGNORE_CASE)
-    // Matches ```wemc ... ``` (WCL source — new unified format)
-    private val WCL_BLOCK = Regex("""(?s)```wemc\s*\n(.*?)```""", RegexOption.IGNORE_CASE)
-    // Strip AI reasoning/thinking noise from inside WCL block content
+    // Matches ```wcl ... ``` — the only AI executable block. Its content is WCL source.
+    private val WCL_BLOCK = Regex("""(?s)```wcl\s*\n(.*?)```""", RegexOption.IGNORE_CASE)
+    // Strip AI reasoning/thinking noise from inside the WCL block content
     private val THINKING_TAG = Regex("""(?s)<(?:icara)?thought[^>]*>.*?</(?:icara)?thought>""")
     private val THINKING_TAG2 = Regex("""(?s)<\/thinking>""")
     private val THINKING_OPEN = Regex("""(?s)<thinking[^>]*>""")
@@ -80,40 +71,49 @@ object FlowResponseParser {
         if (trimmed.isEmpty()) return FlowParseResult.EndFlow(null)
 
         val hasWcl = WCL_BLOCK.containsMatchIn(trimmed)
-        val hasCommands = COMMAND_BLOCK.containsMatchIn(trimmed)
         val hasPlan = PLAN_BLOCK.containsMatchIn(trimmed)
         val hasEof = EOF_MARKER.containsMatchIn(trimmed)
 
         // Strip all block content to extract plain text
         val plainTextOutsideBlocks = buildString {
             val withoutWcl = WCL_BLOCK.replace(trimmed, "")
-            val withoutCommands = COMMAND_BLOCK.replace(withoutWcl, "")
-            val withoutPlan = PLAN_BLOCK.replace(withoutCommands, "")
+            val withoutPlan = PLAN_BLOCK.replace(withoutWcl, "")
             val withoutEof = EOF_MARKER.replace(withoutPlan, "")
             append(withoutEof.trim())
         }
 
-        // Extract raw commands (legacy format — one per line)
-        val rawCmdSequence = if (hasCommands) {
-            COMMAND_BLOCK.findAll(trimmed).flatMap {
-                it.groupValues[1].lineSequence().map(String::trim).filter(String::isNotBlank)
-            }.toList()
-        } else null
-        val hasRawCmdList = rawCmdSequence?.isNotEmpty() == true
-
         // Extract WCL source — strip thinking/reasoning noise from inside the block
-        val wclSource = if (hasWcl) {
-            val raw = WCL_BLOCK.find(trimmed)?.groupValues?.get(1)?.trim() ?: ""
-            stripThinkingNoise(raw)
-        } else ""
+        val wclSources = if (hasWcl) {
+            WCL_BLOCK.findAll(trimmed).map {
+                stripThinkingNoise(it.groupValues[1].trim())
+            }.filter { it.isNotBlank() }.toList()
+        } else emptyList()
+        val hasWclSources = wclSources.isNotEmpty()
 
-        // Case 1: wemc WCL block (new unified format) — takes priority
-        if (hasWcl) {
-            return FlowParseResult.WclSource(wclSource, plainTextOutsideBlocks.takeIf { it.isNotEmpty() })
+        // Case 1: a plan with a first WCL program waits for the user's approval.
+        if (hasPlan && hasWclSources) {
+            val planText = PLAN_BLOCK.find(trimmed)?.groupValues?.get(1)
+                ?: return FlowParseResult.Invalid("Malformed wemc-plan block.")
+            val fields = parsePlanFields(planText)
+            val steps = fields["steps"]?.toIntOrNull()?.takeIf { it >= 1 }
+                ?: return FlowParseResult.Invalid("wemc-plan requires a positive 'steps:' field.")
+            return FlowParseResult.PlanOnly(
+                steps = steps,
+                reason = fields["reason"] ?: "",
+                pendingPlanWcl = wclSources.joinToString("\n"),
+                pendingPlanIsEof = hasEof,
+                displayText = plainTextOutsideBlocks.takeIf { it.isNotEmpty() },
+            )
         }
 
-        // Case 2: plan ONLY (no commands) → ask for approval
-        if (hasPlan && !hasRawCmdList) {
+        // Case 2: wcl block(s) present — compile all content as WCL source.
+        if (hasWclSources) {
+            val combinedWcl = wclSources.joinToString("\n")
+            return FlowParseResult.WclSource(combinedWcl, plainTextOutsideBlocks.takeIf { it.isNotEmpty() }, hasEof)
+        }
+
+        // Case 3: plan only (no WCL) → ask for approval.
+        if (hasPlan) {
             val planText = PLAN_BLOCK.find(trimmed)?.groupValues?.get(1) ?: return FlowParseResult.Invalid("Malformed wemc-plan block.")
             val fields = parsePlanFields(planText)
             val steps = fields["steps"]?.toIntOrNull()?.takeIf { it >= 1 }
@@ -122,28 +122,7 @@ object FlowResponseParser {
             return FlowParseResult.PlanOnly(steps, reason, displayText = plainTextOutsideBlocks.takeIf { it.isNotEmpty() })
         }
 
-        // Case 3: raw commands WITHOUT plan → execute auto (no approval)
-        if (hasRawCmdList && !hasPlan) {
-            val cmds = rawCmdSequence!!
-            return FlowParseResult.Commands(cmds, hasEof, plainTextOutsideBlocks.takeIf { it.isNotEmpty() })
-        }
-
-        // Case 4: both plan AND raw commands → plan was pre-approved, commands follow
-        if (hasPlan && hasRawCmdList) {
-            val planText = PLAN_BLOCK.find(trimmed)?.groupValues?.get(1) ?: return FlowParseResult.Invalid("Malformed wemc-plan block.")
-            val fields = parsePlanFields(planText)
-            val steps = fields["steps"]?.toIntOrNull()?.takeIf { it >= 1 }
-                ?: return FlowParseResult.Invalid("wemc-plan requires a positive 'steps:' field.")
-            val reason = fields["reason"] ?: ""
-            return FlowParseResult.PlanOnly(
-                steps,
-                reason,
-                pendingPlanCommands = rawCmdSequence,
-                displayText = plainTextOutsideBlocks.takeIf { it.isNotEmpty() },
-            )
-        }
-
-        // Case 5: no blocks at all → plain text, end flow
+        // Case 3: no blocks at all → plain text, end flow
         return FlowParseResult.EndFlow(plainTextOutsideBlocks.takeIf { it.isNotEmpty() })
     }
 
@@ -221,6 +200,9 @@ data class AgentOperationSettings(
         queryTimeoutSeconds = queryTimeoutSeconds.coerceIn(MIN_QUERY_TIMEOUT_SECONDS, MAX_QUERY_TIMEOUT_SECONDS),
     )
 
+    fun withFlowEnabled(enabled: Boolean): AgentOperationSettings =
+        copy(mode = if (enabled) AgentOperationMode.FLOW else AgentOperationMode.SINGLE)
+
     companion object {
         const val DEFAULT_MAX_AI_REQUESTS = 30
         const val DEFAULT_MAX_SERVER_STEPS = 50
@@ -239,14 +221,14 @@ data class AgentOperationSettings(
 sealed interface AgentFlowAction {
     data object Noop : AgentFlowAction
     /**
-     * Plan received (with or without first-step commands); waiting for user to approve or reject.
-     * If commands are present they are the first batch and are held until /wemc flow approve.
+     * Plan received (with or without the first WCL program); waiting for user approval.
      */
     data class AwaitPlanApproval(
         val steps: Int,
         val reason: String,
-        /** First-step commands held pending approval. Empty if plan-only. */
-        val pendingPlanCommands: List<String>,
+        /** First WCL program held pending approval, absent for plan-only. */
+        val pendingPlanWcl: String?,
+        val pendingPlanIsEof: Boolean,
         /** Stripped text outside the plan block (may include <eof>). */
         val displayText: String?,
     ) : AgentFlowAction
@@ -255,11 +237,10 @@ sealed interface AgentFlowAction {
     /** Plan approved by user; prompting agent for commands. */
     data object PlanApprovedPrompt : AgentFlowAction
     /** WCL source received; needs compilation before execution. Caller should compile via WclPipeline. */
-    data class WclReady(val wclSource: String, val displayText: String?) : AgentFlowAction
+    data class WclReady(val wclSource: String, val displayText: String?, val isEof: Boolean) : AgentFlowAction
     /** WCL compilation failed; error report is sent back to the agent for correction. */
     data class WclCompilationFailed(val errorReport: String) : AgentFlowAction
-    /** Execute commands immediately (no per-step approval in FLOW mode). */
-    data class ExecuteCommands(val commands: List<String>, val isEof: Boolean, val displayText: String?) : AgentFlowAction
+
     /** Feed server responses back to the agent and ask for the next step. */
     data class RequestContinuation(val context: String) : AgentFlowAction
     /** Flow ended (eof reached, or plain text with no commands). */
@@ -291,9 +272,9 @@ class AgentFlowController(private val settings: AgentOperationSettings) {
     private var totalSteps = 1
     private var aiRequestCount = 0
     private var serverStepCount = 0
-    private var pendingCommands: List<String> = emptyList()
-    /** Commands bundled with the plan, held until approval. */
-    private var pendingPlanCommands: List<String> = emptyList()
+    /** First WCL program bundled with a plan, held until approval. */
+    private var pendingPlanWcl: String? = null
+    private var pendingPlanIsEof = false
     private var pendingResponse = mutableListOf<String>()
     private var queryDeadlineMillis: Long? = null
     private var quietDeadlineMillis: Long? = null
@@ -313,8 +294,8 @@ class AgentFlowController(private val settings: AgentOperationSettings) {
         currentStep = 0
         totalSteps = 1
         planApproved = false
-        pendingCommands = emptyList()
-        pendingPlanCommands = emptyList()
+        pendingPlanWcl = null
+        pendingPlanIsEof = false
         pendingResponse = mutableListOf()
         return AgentFlowAction.Noop
     }
@@ -328,45 +309,30 @@ class AgentFlowController(private val settings: AgentOperationSettings) {
         return when (val result = FlowResponseParser.parse(answer)) {
             is FlowParseResult.Invalid -> AgentFlowAction.Failed("Flow parse error: ${result.message}")
 
-            is FlowParseResult.WclError -> {
-                // WCL had errors — send back to agent for correction
-                AgentFlowAction.WclCompilationFailed(result.errorReport)
-            }
-
             is FlowParseResult.WclSource -> {
-                // WCL source needs to be compiled — handled by the caller via WclPipeline
-                // We signal the caller to compile and execute
-                AgentFlowAction.WclReady(result.wclSource, result.displayText)
+                if (aiRequestCount > norm.maxAiRequests) {
+                    AgentFlowAction.Failed("AI request limit reached (${norm.maxAiRequests}).")
+                } else {
+                    currentStep++
+                    state = if (result.isEof) FlowState.COMPLETED else FlowState.EXECUTING
+                    AgentFlowAction.WclReady(result.wclSource, result.displayText, result.isEof)
+                }
             }
 
             is FlowParseResult.PlanOnly -> {
                 totalSteps = result.steps
                 currentStep = 0
                 state = FlowState.AWAITING_PLAN_APPROVAL
-                pendingPlanCommands = result.pendingPlanCommands
+                pendingPlanWcl = result.pendingPlanWcl
+                pendingPlanIsEof = result.pendingPlanIsEof
                 displayText = result.displayText ?: ""
                 AgentFlowAction.AwaitPlanApproval(
                     result.steps,
                     result.reason,
-                    pendingPlanCommands = result.pendingPlanCommands,
+                    pendingPlanWcl = result.pendingPlanWcl,
+                    pendingPlanIsEof = result.pendingPlanIsEof,
                     displayText = result.displayText,
                 )
-            }
-
-            is FlowParseResult.Commands -> {
-                if (aiRequestCount > norm.maxAiRequests) {
-                    return AgentFlowAction.Failed("AI request limit reached (${norm.maxAiRequests}).")
-                }
-                pendingCommands = result.commands
-                this.displayText = result.plainText ?: ""
-                if (result.isEof) {
-                    state = FlowState.COMPLETED
-                    AgentFlowAction.ExecuteCommands(result.commands, isEof = true, displayText = this.displayText)
-                } else {
-                    currentStep++
-                    state = FlowState.EXECUTING
-                    AgentFlowAction.ExecuteCommands(result.commands, isEof = false, displayText = this.displayText)
-                }
             }
 
             is FlowParseResult.EndFlow -> {
@@ -376,20 +342,20 @@ class AgentFlowController(private val settings: AgentOperationSettings) {
         }
     }
 
-    /** Call after the user approves a plan. Executes the first-step commands immediately. */
+    /** Call after the user approves a plan. Returns its first WCL program if present. */
     fun approvePlan(nowMillis: Long): AgentFlowAction {
         if (state != FlowState.AWAITING_PLAN_APPROVAL) return AgentFlowAction.Noop
         planApproved = true
         currentStep = 1
 
-        val cmds = pendingPlanCommands
-        pendingPlanCommands = emptyList()
-        pendingCommands = cmds
+        val wcl = pendingPlanWcl
+        val isEof = pendingPlanIsEof
+        pendingPlanWcl = null
+        pendingPlanIsEof = false
 
-        return if (cmds.isNotEmpty()) {
-            state = FlowState.EXECUTING
-            val isEof = false // plan approval step is not the last
-            AgentFlowAction.ExecuteCommands(cmds, isEof, displayText = null)
+        return if (wcl != null) {
+            state = if (isEof) FlowState.COMPLETED else FlowState.EXECUTING
+            AgentFlowAction.WclReady(wcl, displayText = null, isEof = isEof)
         } else {
             // No commands bundled — just transition to EXECUTING and wait for agent response
             state = FlowState.EXECUTING
@@ -483,6 +449,13 @@ class AgentFlowController(private val settings: AgentOperationSettings) {
             pendingResponse.forEach { appendLine("  - ${it}") }
         }
         appendLine("=== /completed step $currentStep ===")
+    }
+
+    /** Called when WCL compilation fails on the client side. Returns WclCompilationFailed
+     *  to send back to the agent, and transitions back to AWAITING_AGENT. */
+    fun onWclCompilationError(errorMsg: String): AgentFlowAction {
+        state = FlowState.AWAITING_AGENT
+        return AgentFlowAction.WclCompilationFailed(errorMsg)
     }
 
     private fun fail(msg: String): AgentFlowAction {

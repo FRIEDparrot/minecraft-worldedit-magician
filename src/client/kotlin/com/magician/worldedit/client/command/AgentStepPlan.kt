@@ -46,33 +46,15 @@ object AgentStepPlanParser {
     }
 }
 
-sealed interface SingleModeResponsePolicyResult {
-    data object Execute : SingleModeResponsePolicyResult
-    data object Invalid : SingleModeResponsePolicyResult
-}
-
-/** Ensures a model cannot bypass single-step policy simply by emitting a command block. */
-object SingleModeResponsePolicy {
-    private val commandBlock = Regex("""(?s)```wemc-commands\s*\n.*?```""", RegexOption.IGNORE_CASE)
-
-    fun evaluate(response: String): SingleModeResponsePolicyResult {
-        // In SINGLE mode, wemc-commands is allowed directly — execute it.
-        // If no commands, just display the text.
-        if (!commandBlock.containsMatchIn(response)) return SingleModeResponsePolicyResult.Execute
-        // wemc-commands found — single step, execute directly
-        return SingleModeResponsePolicyResult.Execute
-    }
-}
-
 /** Mode-specific instructions supplied to the model before every user request. */
 object AgentStepPlanningPrompt {
     fun instructions(mode: AgentOperationMode): String = buildString {
         if (mode == AgentOperationMode.SINGLE) {
-            appendLine("WEMC is in SINGLE mode. Respond with a wemc code block for all Minecraft commands.")
+            appendLine("WEMC is in SINGLE mode. Respond with exactly one ```wcl block containing one multi-line WCL program.")
             appendLine()
             appendLine("Format:")
-            appendLine("  ```wemc")
-            appendLine("  <WCL code>")
+            appendLine("  ```wcl")
+            appendLine("  <WCL program>")
             appendLine("  ```")
             appendLine()
             appendLine("Command production rules (IMPORTANT):")
@@ -88,13 +70,20 @@ object AgentStepPlanningPrompt {
             appendLine("  random({a: 60, b: 40})   — weighted random: 'a' 60% chance, 'b' 40% chance")
             appendLine("  seed \"name\"             — lock randomness so the same seed gives the same sequence")
             appendLine()
+            appendLine("LOOP GRAMMAR — use for any repetitive command (IMPORTANT):")
+            appendLine("  i in [0..N] {              // i goes from 0 to N inclusive")
+            appendLine("    summon minecraft:creeper ~<random(-6,6)> ~ ~<random(-6,6)>")
+            appendLine("  }")
+            appendLine("  // The loop body may span multiple lines inside the { } block.")
+            appendLine("  // Do NOT use for, repeat, while, or #for; they are not WCL grammar.")
+            appendLine()
             appendLine("Examples of good WCL:")
             appendLine("  summon minecraft:pig ~<random(-5,5)> ~ ~<random(-5,5)>")
             appendLine("  fill ~ ~64 ~ ~10 ~68 ~10 stone,andesite,diorite,<random([cobblestone, mossy_cobblestone])>")
             appendLine()
             appendLine("Examples of BAD WCL (NEVER do this):")
             appendLine("  summon minecraft:pig ~ ~ ~   // stacking — same coords, all mobs pile up")
-            appendLine("  i in [0..99] { summon minecraft:zombie ~ ~ ~ }  // 100 zombies in one spot")
+            appendLine("  repeat 100 { summon minecraft:zombie ~ ~ ~ }  // 100 zombies stacked — bad!")
             appendLine()
             appendLine("tp @s ~ ~ ~ may be used freely in wemc code to query position.")
             appendLine("setblock, fill, clone, and block-targeted edits require confirmed chunks and the configured Y range.")
@@ -109,21 +98,21 @@ object AgentStepPlanningPrompt {
             appendLine("- Do NOT use loops to summon the same entity at the same coords.")
             appendLine()
             appendLine("Format:")
-            appendLine("  ```wemc")
-            appendLine("  <WCL code>")
+            appendLine("  ```wcl")
+            appendLine("  <WCL program>")
             appendLine("  ```")
             appendLine()
-            appendLine("After wemc code, add <eof> on its own line if the task is finished after this batch.")
+            appendLine("After the wcl program, add <eof> on its own line if the task is finished after this batch.")
             appendLine("Omit <eof> if more steps follow — WEMC will send server responses and you respond with the next wemc code batch.")
             appendLine()
             appendLine("Example (one-shot, done):")
-            appendLine("  ```wemc")
+            appendLine("  ```wcl")
             appendLine("  setblock ~ ~ ~ stone")
             appendLine("  ```")
             appendLine("  <eof>")
             appendLine()
             appendLine("Example (multi-step):")
-            appendLine("  ```wemc")
+            appendLine("  ```wcl")
             appendLine("  fill ~ ~ ~ ~10 ~5 ~10 stone")
             appendLine("  ```")
             appendLine("  (no <eof> — WEMC sends server responses, you continue)")

@@ -25,7 +25,7 @@ class AiResponseCacheTest {
     private val model = "gpt-test"
     private val systemPrompt = "[anchor] static whitelist"
     private val request = "build a tower"
-    private val response = "```wemc-commands\nsetblock 0 64 0 minecraft:stone\n```"
+    private val response = "```wcl\nsetblock 0 64 0 minecraft:stone\n```"
 
     @Test
     fun `cache miss returns null before any entry is stored`() {

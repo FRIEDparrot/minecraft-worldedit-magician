@@ -54,7 +54,9 @@ data class MinecraftCommandDefinition(
  * player's configured command-category permissions before reaching the agent.
  */
 object MinecraftCommandWhitelist {
-    const val MAX_SEQUENCE_LENGTH = 100
+    // WCL may expand a compact loop to up to 1,000 concrete Minecraft commands.
+    // ExecutedCommandHistory remains independently capped at 100 displayable records.
+    const val MAX_SEQUENCE_LENGTH = 1000
     private const val TIME_WIKI = "https://minecraft.wiki/w/Commands/time"
     private const val DATA_WIKI = "https://minecraft.wiki/w/Commands/data"
     private const val CLEAR_WIKI = "https://minecraft.wiki/w/Commands/clear"
@@ -144,35 +146,23 @@ object MinecraftCommandWhitelist {
         get() = availableDefinitions().map(MinecraftCommandDefinition::asAgentInfo)
 
     fun contextForAgent(): String = buildString {
-            val enabled = availableDefinitions()
-            val disabled = disabledCategories()
-            appendLine("Reply with ONE fenced ```wemc-commands block, one command per line, no leading slash. No explanation, no preamble.")
-            appendLine("Allowed commands:")
-            enabled.forEach { appendLine("- /${it.syntax}") }
-            if (disabled.isNotEmpty()) appendLine("Disabled (do not use): ${disabled.joinToString { it.displayName }}.")
-            appendLine("Never use: execute, function, schedule, command blocks, op, deop, ban, whitelist, stop, reload, seed, difficulty, worldborder, teleport. Keep coords ≤50 from origin.")
+            appendLine("Reply with exactly one fenced ```wcl block containing a multi-line WCL program, with no prose.")
+            appendLine("WCL is compiled to Minecraft commands before the WEMC blacklist gate. The fence is not a one-command-per-line transport format.")
+            appendLine("For repeated work, use: i in [0..N] { followed by body statements on following lines, then }.")
+            appendLine("Never use for, repeat, while, or #for in WCL; execute is an ordinary Minecraft command and is allowed subject to the WEMC gate.")
+            appendLine("Use ~<random(-6,6)> offsets for repeated entity summons so entities do not stack.")
+            appendLine("The command catalog below is guidance, not a closed allow-list. WCL may contain any Minecraft or mod command text.")
+            appendLine("WEMC blocks only explicit server/admin, persistence, function/schedule, command-block, and network-management controls after compilation.")
+            appendLine("Allowed examples include gamerule, tp, execute ... run ..., and modded command roots; the active server still enforces permissions.")
+            appendLine("Never use: op, deop, ban, pardon, whitelist, stop, reload, save-all, function, schedule, datapack, command blocks, publish, or transfer.")
         }.trim()
 
-    fun validateSequence(commands: List<String>): CommandSequenceValidation {
-        if (commands.isEmpty()) return CommandSequenceValidation.Invalid("No commands were provided.")
-        if (commands.size > MAX_SEQUENCE_LENGTH) return CommandSequenceValidation.Invalid("A sequence may contain at most $MAX_SEQUENCE_LENGTH commands. Use /wemc flow for a planned multi-step operation.")
-
-        val normalized = commands.mapIndexed { index, raw ->
-            val command = raw.trim().removePrefix("/")
-            if (command.isBlank()) return CommandSequenceValidation.Invalid("Command ${index + 1} is blank.")
-            if (command.any { it == '\n' || it == '\r' }) return CommandSequenceValidation.Invalid("Command ${index + 1} contains a line break.")
-            val error = validateCommand(command)
-            if (error != null) return CommandSequenceValidation.Invalid("Command ${index + 1}: $error")
-            command
-        }
-        return CommandSequenceValidation.Valid(normalized)
-    }
-
-    fun extractAgentSequence(response: String): CommandSequenceValidation? {
-        val match = COMMAND_BLOCK.find(response) ?: return null
-        val commands = match.groupValues[1].lineSequence().map(String::trim).filter(String::isNotBlank).toList()
-        return validateSequence(commands)
-    }
+    /**
+     * Post-compilation execution gate. WCL itself is root-agnostic; the blacklist
+     * decides which concrete Minecraft command sequences may reach the server.
+     */
+    fun validateSequence(commands: List<String>): CommandSequenceValidation =
+        MinecraftCommandBlacklist.validateSequence(commands)
 
     fun disabledCategories(): List<MinecraftCommandCategory> = MinecraftCommandCategory.entries.filterNot(::isCategoryEnabled)
 
@@ -218,7 +208,6 @@ object MinecraftCommandWhitelist {
 
     private fun isDurationValue(value: String): Boolean = Regex("""\d+(?:\.\d+)?[dst]?""").matches(value)
 
-    private val COMMAND_BLOCK = Regex("""(?s)```wemc-commands\s*\n(.*?)```""", RegexOption.IGNORE_CASE)
     private val WHITESPACE = Regex("\\s+")
     private val TIME_QUERY_VALUES = setOf("daytime", "gametime", "day")
     private val TIME_KEYWORDS = setOf("day", "night", "noon", "midnight")

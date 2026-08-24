@@ -15,13 +15,13 @@ import com.magician.worldedit.client.command.ExtendedThinkingMode
 import com.magician.worldedit.client.command.AgentOperationSettings
 import com.magician.worldedit.client.command.AgentOperationSettingsStore
 
-import com.magician.worldedit.client.command.SingleModeResponsePolicy
-import com.magician.worldedit.client.command.SingleModeResponsePolicyResult
+
 import com.magician.worldedit.client.command.AgentResponsePresentation
-import com.magician.worldedit.client.command.wcl.WclPipeline
-import com.magician.worldedit.client.command.wcl.WclResult
+import com.magician.worldedit.client.command.FlowParseResult
+import com.magician.worldedit.client.command.FlowResponseParser
 import com.magician.worldedit.client.command.MinecraftCommandExecutor
 import com.magician.worldedit.client.command.MinecraftCommandWhitelist
+import com.magician.worldedit.client.command.wcl.WclResult
 import com.magician.worldedit.client.config.AiModelCatalog
 import com.magician.worldedit.client.config.AiProvider
 import com.magician.worldedit.client.config.AiChatClient
@@ -220,7 +220,8 @@ object WorldeditMagicianClient : ClientModInitializer {
                     listAvailableCommands(page)
                     Command.SINGLE_SUCCESS
                 }))
-                .then(literal("history").executes { listExecutedCommands(); Command.SINGLE_SUCCESS }),
+                .then(literal("history").executes { listExecutedCommands(); Command.SINGLE_SUCCESS })
+                .then(literal("wcl-history").executes { listWclHistory(); Command.SINGLE_SUCCESS }),
         )
         .then(
             literal("provider")
@@ -274,7 +275,12 @@ object WorldeditMagicianClient : ClientModInitializer {
                 .then(literal("approve").executes { setApproval(ApprovalMode.APPROVE); Command.SINGLE_SUCCESS }),
         )
         .then(
-            literal("run"),
+            literal("run").then(argument("cmd", StringArgumentType.greedyString()).executes { context ->
+                val cmd = StringArgumentType.getString(context, "cmd")
+                val result = MinecraftCommandExecutor.executeSingleGated(cmd)
+                sendMessage(result)
+                Command.SINGLE_SUCCESS
+            }),
         )
         // Debug/info commands for agent context
         .then(
@@ -328,6 +334,20 @@ object WorldeditMagicianClient : ClientModInitializer {
         history.forEachIndexed { index, entry ->
             sendMessage("${index + 1}. /${entry.command} — sent to server")
         }
+    }
+
+    private fun listWclHistory() {
+        val history = MinecraftCommandExecutor.wclHistory()
+        if (history.isEmpty()) {
+            sendMessage("No WCL code has been generated this session.")
+            return
+        }
+        sendMessage("WCL history (${history.size} entries, newest first):")
+        history.take(20).forEachIndexed { index, entry ->
+            sendMessage("${index + 1}. ${entry.wclSource.take(80)}${if (entry.wclSource.length > 80) "..." else ""}")
+            sendMessage("   → ${entry.commands.size} MC command(s): ${entry.commands.take(3).joinToString("; ")}${if (entry.commands.size > 3) "..." else ""}")
+        }
+        if (history.size > 20) sendMessage("(showing most recent 20 of ${history.size})")
     }
 
     private fun openConfigurationScreen() {
@@ -433,6 +453,7 @@ object WorldeditMagicianClient : ClientModInitializer {
                             if (result.fromCache) {
                                 sendMessage("WEMC cache hit — reused a matching response (no AI request).")
                             }
+                            if (AgentOperationSettingsStore.load().debugMode) displayRawAgentResponse(result.answer)
                             WemcSessionManager.recordTurn(
                                 ChatTurn(userContent = userMessage, assistantContent = result.answer)
                             )
@@ -521,30 +542,41 @@ object WorldeditMagicianClient : ClientModInitializer {
             Minecraft.getInstance().execute {
                 if (activeFlow !== flow) return@execute
                 when (result) {
-                    is AiChatResult.Success -> handleFlowAction(flow, flow.controller.onAgentResponse(result.answer))
+                    is AiChatResult.Success -> {
+                        if (AgentOperationSettingsStore.load().debugMode) displayRawAgentResponse(result.answer)
+                        handleFlowAction(flow, flow.controller.onAgentResponse(result.answer))
+                    }
                     is AiChatResult.Failure -> finishFlow(flow, result.message)
                 }
             }
         }
     }
 
+    private fun displayRawAgentResponse(answer: String) {
+        if (answer.isBlank()) {
+            sendMessage("[WEMC DEBUG] Agent returned an empty response.")
+            return
+        }
+        sendMessage("[WEMC DEBUG] Raw agent response:")
+        answer.chunked(220).forEachIndexed { index, chunk ->
+            sendMessage("[WEMC DEBUG ${index + 1}] $chunk")
+        }
+    }
+
     private fun displayAndSubmitAgentAnswer(answer: String, approvalMode: ApprovalMode, singleMode: Boolean = false) {
-        if (singleMode) {
-            when (SingleModeResponsePolicy.evaluate(answer)) {
-                SingleModeResponsePolicyResult.Execute -> Unit
-                SingleModeResponsePolicyResult.Invalid -> {
-                    sendMessage("Agent command request rejected: wemc-commands format is invalid.")
+        if (!singleMode) return
+        when (val parsed = FlowResponseParser.parse(answer)) {
+            is FlowParseResult.WclSource -> {
+                val player = Minecraft.getInstance().player
+                if (player == null) {
+                    sendMessage("No active player connection.")
                     return
                 }
+                val result = MinecraftCommandExecutor.submitWcl(parsed.wclSource, player.position(), approvalMode)
+                sendMessage(result)
             }
+            else -> sendMessage("Agent WCL request rejected: reply with exactly one ```wcl block``` containing a WCL program.")
         }
-        // In SINGLE mode the executor result IS the display; agent narrative text is stripped
-        val resultMessage = MinecraftCommandExecutor.submitAgentResponse(answer, approvalMode) ?: return
-        if (!resultMessage.startsWith("Sent ")) {
-            // Rejection reason — always show
-            sendMessage(resultMessage)
-        }
-        // "Sent N command(s)" is already shown by the executor; nothing extra to print
     }
 
     private fun handleFlowGameMessage(message: String) {
@@ -566,16 +598,16 @@ object WorldeditMagicianClient : ClientModInitializer {
                         ?.chunked(240)
                         ?.forEach(::sendMessage)
                 }
-                if (action.pendingPlanCommands.isNotEmpty()) {
+                if (action.pendingPlanWcl != null) {
                     sendMessage("[WEMC] Plan proposed (${action.steps} steps): ${action.reason}")
-                    sendMessage("[WEMC] First batch (${action.pendingPlanCommands.size} commands) will execute on approval.")
+                    sendMessage("[WEMC] The first WCL program will compile and execute on approval.")
                     sendMessage("[WEMC] Use /wemc flow approve to accept, /wemc flow cancel to reject.")
                 } else {
                     sendMessage("[WEMC] Plan proposed (${action.steps} steps): ${action.reason}")
                     sendMessage("[WEMC] Use /wemc flow approve to accept, /wemc flow cancel to reject.")
                 }
             }
-            // User approved a plan — now send continuation prompt to get commands
+            // User approved a plan with no bundled WCL — prompt the agent for step 1.
             AgentFlowAction.PlanApprovedPrompt -> {
                 sendContinuationPrompt(flow)
             }
@@ -583,15 +615,7 @@ object WorldeditMagicianClient : ClientModInitializer {
             AgentFlowAction.PlanRejected -> {
                 finishFlow(flow, "Plan rejected.")
             }
-            // Execute commands (auto-executed in FLOW mode, no per-step approval)
-            is AgentFlowAction.ExecuteCommands -> {
-                action.displayText?.takeIf { it.isNotEmpty() }?.let { text ->
-                    AgentResponsePresentation.displayText(text)
-                        ?.chunked(240)
-                        ?.forEach(::sendMessage)
-                }
-                executeFlowCommands(flow, action.commands, action.isEof)
-            }
+
             // Flow ended (plain text or empty)
             is AgentFlowAction.FlowEnded -> {
                 action.displayText?.let { text ->
@@ -603,39 +627,32 @@ object WorldeditMagicianClient : ClientModInitializer {
             }
             is AgentFlowAction.Failed -> finishFlow(flow, action.message)
             AgentFlowAction.Noop -> Unit
-            // WCL needs compilation + execution
+            // WCL is the sole generated executable form: compile, validate compiled output, then dispatch.
             is AgentFlowAction.WclReady -> {
-                val player = Minecraft.getInstance().player
-                val pos = player?.blockPosition()
-                val px = pos?.x ?: 0
-                val py = pos?.y ?: 64
-                val pz = pos?.z ?: 0
-                val wclResult = WclPipeline.run(action.wclSource, px, py, pz)
-                when (wclResult) {
-                    is WclResult.Ok -> {
-                        if (wclResult.echoes.isNotEmpty()) {
-                            wclResult.echoes.forEach { sendMessage("[WEMC ECHO] $it") }
-                        }
-                        if (wclResult.commands.isEmpty()) {
-                            sendMessage("[WEMC] WCL produced no commands (check for echo-only output).")
-                        } else {
-                            executeFlowCommands(flow, wclResult.commands, isEof = true)
-                        }
-                    }
+                val player = Minecraft.getInstance().player ?: return
+                when (val compiled = MinecraftCommandExecutor.compileWcl(action.wclSource, player.position())) {
                     is WclResult.Err -> {
-                        val msg = "[WEMC WCL Error] ${wclResult.msg}"
-                        sendMessage(msg)
-                        AgentFlowAction.WclCompilationFailed(msg)
+                        val error = "WCL compilation error: ${compiled.msg}"
+                        sendMessage(error)
+                        handleFlowAction(flow, flow.controller.onWclCompilationError(error))
+                    }
+                    is WclResult.Ok -> {
+                        if (compiled.echoes.isNotEmpty()) compiled.echoes.forEach { sendMessage("[WEMC ECHO] $it") }
+                        if (compiled.commands.isEmpty()) {
+                            sendMessage("[WEMC] WCL compiled successfully but produced no Minecraft commands.")
+                        } else {
+                            executeFlowCommands(flow, compiled.commands, action.isEof)
+                        }
                     }
                 }
             }
             is AgentFlowAction.WclCompilationFailed -> {
-                // Send WCL errors back to agent for correction
-                sendFlowRequest(flow, "The following WCL had errors. Fix the WCL syntax and retry:\n\n${action.errorReport}")
+                // Send WCL errors back to the agent for correction
+                sendFlowRequest(flow, "Your previous WCL code had errors:\n${action.errorReport}\n\nUse only the documented WCL grammar and output one corrected ```wcl block``` with no prose inside.")
             }
             // RequestContinuation: feed server results back to the agent
             is AgentFlowAction.RequestContinuation -> {
-                sendFlowRequest(flow, "${flow.originalPrompt}\n\n${action.context}\n\nContinue with exactly the next step only. Return wemc-commands for the next step. Add <eof> only if this is the last step.")
+                sendFlowRequest(flow, "${flow.originalPrompt}\n\n${action.context}\n\nContinue with exactly the next step only. Return one ```wcl block``` for the next step. Add <eof> only if this is the last step.")
             }
             else -> { /* Legacy / unhandled action types — ignore */ }
         }
@@ -664,7 +681,7 @@ object WorldeditMagicianClient : ClientModInitializer {
             appendLine()
             appendLine("=== PLAN APPROVED ===")
             appendLine("The user has approved the plan above. Execute step 1.")
-            appendLine("Return wemc-commands for step 1. Add <eof> only if this is the last step.")
+            appendLine("Return exactly one ```wcl block``` for step 1. Add <eof> only if this is the last step.")
         }
         sendFlowRequest(flow, continuationPrompt)
     }
@@ -692,8 +709,15 @@ object WorldeditMagicianClient : ClientModInitializer {
     private fun setOperationMode(mode: AgentOperationMode) {
         val settings = AgentOperationSettingsStore.load().copy(mode = mode).normalized()
         AgentOperationSettingsStore.save(settings)
-        if (mode == AgentOperationMode.SINGLE && activeFlow != null) finishFlow(activeFlow!!, "Flow stopped because operation mode changed to Single.")
+        onAgentOperationSettingsSaved(settings)
         sendMessage("Agent operation mode: ${if (mode == AgentOperationMode.SINGLE) "Single" else "Flow"}.")
+    }
+
+    /** Stop an active flow when the Agent panel disables Flow mode. */
+    fun onAgentOperationSettingsSaved(settings: AgentOperationSettings) {
+        if (settings.mode == AgentOperationMode.SINGLE && activeFlow != null) {
+            finishFlow(activeFlow!!, "Flow stopped because Flow mode was disabled.")
+        }
     }
 
     private fun showOperationStatus() {

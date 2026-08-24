@@ -37,48 +37,49 @@ class AgentFlowTest {
     }
 
     @Test
-    fun `FlowResponseParser parses wemc-commands as Commands`() {
-        val response = "```wemc-commands\nfill ~ ~ ~ ~10 ~5 ~10 stone\n```"
-        val result = FlowResponseParser.parse(response)
-        assertIs<FlowParseResult.Commands>(result)
-        assertEquals(1, result.commands.size)
-        assertTrue(!result.isEof)
-    }
-
-    @Test
-    fun `FlowResponseParser parses wemc-commands with eof as Commands with isEof true`() {
-        val response = "```wemc-commands\nsetblock ~ ~ ~ stone\n```\n<eof>"
-        val result = FlowResponseParser.parse(response)
-        assertIs<FlowParseResult.Commands>(result)
-        assertTrue(result.isEof)
-    }
-
-    @Test
-    fun `FlowResponseParser parses wemc block as WclSource`() {
-        val response = "```wemc\nsetblock ~ ~ ~ stone\n```"
+    fun `FlowResponseParser parses wcl fence as WclSource`() {
+        val response = "```wcl\nfill ~ ~ ~ ~10 ~5 ~10 stone\n```"
         val result = FlowResponseParser.parse(response)
         assertIs<FlowParseResult.WclSource>(result)
-        assertEquals("setblock ~ ~ ~ stone", result.wclSource.trim())
+        assertEquals("fill ~ ~ ~ ~10 ~5 ~10 stone", result.wclSource.trim())
     }
 
     @Test
-    fun `FlowResponseParser parses plan with wemc-commands as PlanOnly with pending commands`() {
-        // Plan + wemc-commands together: plan needs approval first; commands are held as pendingPlanCommands
+    fun `FlowResponseParser parses wcl fence with eof as WclSource`() {
+        val response = "```wcl\nsetblock ~ ~ ~ stone\n```\n<eof>"
+        val result = FlowResponseParser.parse(response)
+        assertIs<FlowParseResult.WclSource>(result)
+    }
+
+
+    @Test
+    fun `FlowResponseParser parses plan-only as AwaitPlanApproval`() {
+        // Plan-only responses wait for approval before the first WCL program.
+        val response = """```wemc-plan
+steps: 3
+reason: Need to clear area first
+```"""
+        val result = FlowResponseParser.parse(response)
+        assertIs<FlowParseResult.PlanOnly>(result)
+        assertEquals(3, result.steps)
+        assertEquals("Need to clear area first", result.reason)
+    }
+
+    @Test
+    fun `FlowResponseParser parses plan-with-wcl as PlanOnly with pending WCL`() {
+        // A plan plus WCL is held until the user approves it.
         val response = """
             ```wemc-plan
             steps: 2
             reason: Building a house
             ```
-            ```wemc-commands
-            setblock ~ ~ ~ stone
+            ```wcl
+            fill ~ ~ ~ ~10 ~10 ~10 stone
             ```
         """.trimIndent()
         val result = FlowResponseParser.parse(response)
         assertIs<FlowParseResult.PlanOnly>(result)
-        assertEquals(2, result.steps)
-        assertEquals("Building a house", result.reason)
-        assertEquals(1, result.pendingPlanCommands.size)
-        assertEquals("setblock ~ ~ ~ stone", result.pendingPlanCommands[0])
+        assertEquals("fill ~ ~ ~ ~10 ~10 ~10 stone", result.pendingPlanWcl?.trim())
     }
 
     @Test
@@ -142,13 +143,13 @@ class AgentFlowTest {
     }
 
     @Test
-    fun `direct commands bypass approval and execute immediately`() {
+    fun `wcl fence triggers WclReady for compilation`() {
+        // wcl always goes to WclReady, never directly to raw MC execution
         val controller = AgentFlowController(AgentOperationSettings())
         controller.start()
-        val action = controller.onAgentResponse("```wemc-commands\nsetblock ~ ~ ~ stone\n```")
-        assertIs<AgentFlowAction.ExecuteCommands>(action)
-        assertEquals(1, action.commands.size)
-        assertTrue(!action.isEof)
+        val action = controller.onAgentResponse("```wcl\nsetblock ~ ~ ~ stone\n```")
+        assertIs<AgentFlowAction.WclReady>(action)
+        assertTrue(action.wclSource.contains("setblock"))
     }
 
     @Test

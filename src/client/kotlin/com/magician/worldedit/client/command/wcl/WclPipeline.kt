@@ -17,13 +17,8 @@ object WclPipeline {
     }
 
     fun run(source: String, ctx: WclCtx): WclResult {
-        // 1. Lex
-        val tokens = WclLexer(source).tokenize()
-
-        // 2. Parse
-        val prog = WclParser(tokens).parse()
-
-        // 3. Compile
-        return WclCompiler(prog).compile(ctx)
+        // WCL uses a line-preserving compiler so command text (NBT, namespaces,
+        // coordinates, selectors) is passed unchanged until WCL substitutions occur.
+        return WclTextCompiler(source, ctx).compile()
     }
 }

@@ -4,15 +4,15 @@
 
 WCL is a domain-specific language for expressing Minecraft WorldEdit commands that involve repetition, parameterization, or conditional logic. Instead of the agent generating `setblock` 100 times, it writes a WCL program that the WCL pipeline compiles into concrete Minecraft commands.
 
-**Pipeline:** `wemc block` → Lexer → Parser → TypeChecker → Compiler → Minecraft commands → Executor
+**Protocol:** `wcl` block → Lex → Parse → Compile → MC commands → Executor
 
 **Execution flow:**
 ```
-Agent response (```wemc ... ```)
-  → FlowResponseParser.extracts wclSource
-  → WclPipeline.run() → WclLexer → WclParser → WclTypeChecker → WclCompiler
+Agent response (```wcl ... ```)
+  → FlowResponseParser extracts WCL source
+  → WclPipeline.run() → WclLexer → WclParser → WclCompiler
   → Success: List<String> of MC commands → MinecraftCommandExecutor
-  → Failure: WclError list → sent back to agent for correction
+  → Failure: error message → sent back to agent for correction
 ```
 
 ---
@@ -70,16 +70,17 @@ Variables substitute with `$name` or `${name}`:
 setblock ~$x ~$y ~$z stone
 ```
 
-### 2. Loop — Range (`i from START to END [step STEP]`)
+### 2. Loop — Range (`variable in [START..END]`)
 
 ```wcl
-y in [0..3], x in [0..10] {
-    setblock x y z stone
+y in [0..3] {
+    x in [0..10] {
+        setblock ~$x ~$y ~ stone
+    }
 }
 ```
 
-Ranges: `start..end` (inclusive), `[start..end]` (inclusive), `[start..<end)` (exclusive end).
-Loop variable is available as `$variable` inside the body.
+Ranges are inclusive. The loop variable is available as `$variable` inside the body. Only this native range form is valid WCL loop grammar.
 
 ### 3. Loop — Enumeration
 
@@ -296,17 +297,18 @@ When `AgentOperationSettings.debugMode = true`:
 
 ## Protocol Integration
 
-In FLOW mode, the agent returns WCL code in a `wemc` block:
+In both SINGLE and FLOW modes, the agent returns WCL code in a `wcl` block:
 
 ```
 I'm building a wall.
 
-```wemc
-y in [0..4], x in [0..9] {
-    setblock ~x ~y ~ stone
+```wcl
+y in [0..4] {
+    x in [0..9] {
+        setblock ~$x ~$y ~ stone
+    }
 }
 ```
-
 <eof>
 ```
 
@@ -316,8 +318,16 @@ If WCL has errors: error report is sent back to the agent, which should respond 
 
 ---
 
-## WCL vs Legacy `wemc-commands`
+## `wcl` Block
 
-`wemc` (WCL) is the **preferred** format. The old `wemc-commands` format (raw one-per-line commands) is still supported for backward compatibility but will eventually be phased out.
+The `wcl` block contains one complete WCL program. Its multi-line source is compiled to concrete Minecraft commands before the WEMC blacklist gate and execution. WCL itself does not filter Minecraft command roots.
 
-The `FlowResponseParser` checks for `wemc` blocks **first**, then falls back to `wemc-commands` for legacy responses.
+```
+```wcl
+i in [0..99] {
+    summon minecraft:pig ~<random(-6,6)> ~ ~<random(-6,6)>
+}
+```
+```
+
+The WCL pipeline compiles it to concrete `/summon` commands with spread-out coordinates.

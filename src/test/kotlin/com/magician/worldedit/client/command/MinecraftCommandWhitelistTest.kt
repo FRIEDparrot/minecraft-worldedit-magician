@@ -7,10 +7,49 @@ import kotlin.test.assertTrue
 
 class MinecraftCommandWhitelistTest {
     @Test
-    fun `chat response extracts only the explicit wemc command block`() {
-        val result = MinecraftCommandWhitelist.extractAgentSequence(
-            "Here is the change:\n```wemc-commands\ntime set noon\nweather clear\n```",
+    fun `blacklist gate allows ordinary vanilla and modded command roots`() {
+        val commands = listOf(
+            "gamerule keepInventory true",
+            "tp @s ~ ~10 ~",
+            "execute as @s run summon minecraft:pig ~ ~ ~",
+            "examplemod:build_castle ~ ~ ~",
         )
+
+        assertEquals(
+            commands,
+            assertIs<CommandSequenceValidation.Valid>(MinecraftCommandWhitelist.validateSequence(commands)).commands,
+        )
+    }
+
+    @Test
+    fun `blacklist gate blocks direct and execute nested server controls`() {
+        val direct = assertIs<CommandSequenceValidation.Invalid>(
+            MinecraftCommandWhitelist.validateSequence(listOf("stop")),
+        )
+        val nested = assertIs<CommandSequenceValidation.Invalid>(
+            MinecraftCommandWhitelist.validateSequence(listOf("execute as @s run function example:danger")),
+        )
+
+        assertTrue(direct.message.contains("blocked"))
+        assertTrue(nested.message.contains("blocked"))
+    }
+
+    @Test
+    fun `execute and tp are never blocked by the WEMC blacklist`() {
+        val commands = listOf(
+            "execute as @e[type=minecraft:pig] at @s run particle minecraft:happy_villager ~ ~ ~",
+            "tp @e[type=minecraft:pig] ~ ~1 ~",
+        )
+
+        assertEquals(
+            commands,
+            assertIs<CommandSequenceValidation.Valid>(MinecraftCommandWhitelist.validateSequence(commands)).commands,
+        )
+    }
+
+    @Test
+    fun `post compile gate validates concrete Minecraft command strings`() {
+        val result = MinecraftCommandWhitelist.validateSequence(listOf("time set noon", "weather clear"))
 
         assertEquals(
             listOf("time set noon", "weather clear"),
@@ -19,20 +58,21 @@ class MinecraftCommandWhitelistTest {
     }
 
     @Test
-    fun `time query requires a wiki documented query target`() {
-        val incomplete = assertIs<CommandSequenceValidation.Invalid>(MinecraftCommandWhitelist.validateSequence(listOf("time query")))
-        assertTrue(incomplete.message.contains("daytime|gametime|day"))
-
+    fun `post compile gate leaves ordinary command syntax to the server`() {
+        val command = "time query"
         assertEquals(
-            listOf("time query daytime"),
-            assertIs<CommandSequenceValidation.Valid>(MinecraftCommandWhitelist.validateSequence(listOf("time query daytime"))).commands,
+            listOf(command),
+            assertIs<CommandSequenceValidation.Valid>(MinecraftCommandWhitelist.validateSequence(listOf(command))).commands,
         )
     }
 
     @Test
-    fun `invented entity query is rejected`() {
-        val invalid = assertIs<CommandSequenceValidation.Invalid>(MinecraftCommandWhitelist.validateSequence(listOf("entity query 40")))
-        assertTrue(invalid.message.contains("not on the WEMC command whitelist"))
+    fun `unknown root passes through the blacklist gate`() {
+        val command = "entity query 40"
+        assertEquals(
+            listOf(command),
+            assertIs<CommandSequenceValidation.Valid>(MinecraftCommandWhitelist.validateSequence(listOf(command))).commands,
+        )
     }
 
     @Test
@@ -63,7 +103,7 @@ class MinecraftCommandWhitelistTest {
     }
 
     @Test
-    fun `disabled inventory commands are stripped and rejected`() {
+    fun `disabled catalog categories do not block post compile execution`() {
         val original = CommandPermissionsStore.load()
         try {
             CommandPermissionsStore.save(original.withCategory(MinecraftCommandCategory.INVENTORY, false))
@@ -72,8 +112,12 @@ class MinecraftCommandWhitelistTest {
                     it.syntax == "/clear [targets] [item] [maxCount]" ||
                     it.syntax.startsWith("/item <replace")
             })
-            val invalid = assertIs<CommandSequenceValidation.Invalid>(MinecraftCommandWhitelist.validateSequence(listOf("give @s minecraft:stone")))
-            assertTrue(invalid.message.contains("disabled by command permissions"))
+            assertEquals(
+                listOf("give @s minecraft:stone"),
+                assertIs<CommandSequenceValidation.Valid>(
+                    MinecraftCommandWhitelist.validateSequence(listOf("give @s minecraft:stone")),
+                ).commands,
+            )
         } finally {
             CommandPermissionsStore.save(original)
         }
@@ -86,9 +130,9 @@ class MinecraftCommandWhitelistTest {
     }
 
     @Test
-    fun `more than one hundred commands directs the agent to flow mode`() {
-        val commands = (1..101).map { "setblock $it 64 0 minecraft:stone" }
+    fun `more than one thousand commands is rejected by the WCL execution safety limit`() {
+        val commands = (1..1001).map { "setblock $it 64 0 minecraft:stone" }
         val invalid = assertIs<CommandSequenceValidation.Invalid>(MinecraftCommandWhitelist.validateSequence(commands))
-        assertTrue(invalid.message.contains("/wemc flow"))
+        assertTrue(invalid.message.contains("at most 1000"))
     }
 }

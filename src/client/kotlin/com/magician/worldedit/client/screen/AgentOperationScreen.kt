@@ -1,5 +1,6 @@
 package com.magician.worldedit.client.screen
 
+import com.magician.worldedit.client.WorldeditMagicianClient
 import com.magician.worldedit.client.command.AgentOperationMode
 import com.magician.worldedit.client.command.AgentOperationSettings
 import com.magician.worldedit.client.command.AgentOperationSettingsStore
@@ -100,6 +101,7 @@ class AgentOperationScreen(private val parent: Screen?) : Screen(TITLE) {
     private fun saveAndReopen() {
         settings = settings.normalized()
         AgentOperationSettingsStore.save(settings)
+        WorldeditMagicianClient.onAgentOperationSettingsSaved(settings)
         Minecraft.getInstance().setScreen(AgentOperationScreen(parent))
     }
 

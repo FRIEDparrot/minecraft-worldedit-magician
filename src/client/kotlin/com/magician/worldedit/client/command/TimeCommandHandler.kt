@@ -3,7 +3,7 @@ package com.magician.worldedit.client.command
 import net.minecraft.client.Minecraft
 import net.minecraft.network.chat.Component
 
-/** Sends a non-reversible, whitelisted vanilla `time set` command to the server. */
+/** Sends a non-reversible vanilla `time set` command through the post-compile gate. */
 object TimeCommandHandler {
     fun execute(timeValue: String): Boolean {
         val value = timeValue.trim().lowercase()
