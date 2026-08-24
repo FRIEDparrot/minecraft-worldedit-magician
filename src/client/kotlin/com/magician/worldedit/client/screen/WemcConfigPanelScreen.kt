@@ -14,19 +14,23 @@ import com.magician.worldedit.client.config.ModelCatalogResult
 import com.magician.worldedit.client.config.OpenAiSettings
 import com.magician.worldedit.client.config.OpenAiSettingsStore
 import com.magician.worldedit.client.config.WorldEditInstallationChecker
+import com.magician.worldedit.client.screen.reusable.DropdownWidget
 import com.magician.worldedit.client.screen.reusable.TabbedScrollablePanelScreen
+
 import net.minecraft.client.Minecraft
+import net.minecraft.client.gui.GuiGraphics
 import net.minecraft.client.gui.components.AbstractWidget
 import net.minecraft.client.gui.components.Button
 import net.minecraft.client.gui.components.EditBox
 import net.minecraft.client.gui.components.StringWidget
 import net.minecraft.client.gui.screens.Screen
+import net.minecraft.client.input.MouseButtonEvent
 import net.minecraft.network.chat.Component
 import net.minecraft.network.chat.Style
 import net.minecraft.network.chat.TextColor
 import net.minecraft.util.FormattedCharSequence
 
-enum class ConfigTab { AI_MODEL, AGENT, COMMANDS, WORLDEDIT }
+enum class ConfigTab { AI_MODEL, AGENT, COMMANDS, TOOLS, WORLDEDIT }
 
 /**
  * Unified WEMC settings panel — centered, scrollable, 4-tab design.
@@ -47,20 +51,28 @@ class WemcConfigPanelScreen(
     initialOpSettings: AgentOperationSettings? = null,
     initialTab: ConfigTab = ConfigTab.AI_MODEL,
     initialShowSecrets: Boolean = false,
+    // Pass discovered models and selection index across reopen() calls
+    initialDiscoveredModels: List<String> = emptyList(),
+    initialModelIndex: Int = 0,
 ) : TabbedScrollablePanelScreen<ConfigTab>(TITLE, ConfigTab.entries.toList(), initialTab) {
 
     private var settings: OpenAiSettings = initialSettings ?: OpenAiSettingsStore.load()
     private var opSettings: AgentOperationSettings = initialOpSettings ?: AgentOperationSettingsStore.load()
 
+
     // Content widget fields
-    private var modelField: EditBox? = null
+    private var modelDropdown: DropdownWidget? = null
+    private var providerDropdown: DropdownWidget? = null
     private var apiKeyField: EditBox? = null
     private var baseUrlField: EditBox? = null
     private var contextWindowField: EditBox? = null
     private var maxOutputTokensField: EditBox? = null
 
+
     private var showSecrets = initialShowSecrets
-    private var discoveredModels: List<String> = emptyList()
+    // Persist discovered models and selection across reopen() calls
+    private var discoveredModels: List<String> = initialDiscoveredModels
+    private var modelIndex: Int = initialModelIndex.coerceIn(0, (initialDiscoveredModels.size - 1).coerceAtLeast(0))
     private var statusMessage: String? = null
     private var statusIsError = false
     private var validationMessage: Component? = null
@@ -73,12 +85,16 @@ class WemcConfigPanelScreen(
             ConfigTab.AI_MODEL -> "AI Model"
             ConfigTab.AGENT -> "Agent"
             ConfigTab.COMMANDS -> "Commands"
+            ConfigTab.TOOLS -> "Tools"
             ConfigTab.WORLDEDIT -> "WorldEdit"
         }
     )
 
     override fun beforeTabChange(from: ConfigTab, to: ConfigTab) {
-        if (from == ConfigTab.AI_MODEL) settings = collectAiSettings()
+        if (from == ConfigTab.AI_MODEL) {
+            // Must update the class field so reopen() uses the latest values
+            settings = collectAiSettings()
+        }
         statusMessage = null
         validationMessage = null
     }
@@ -88,6 +104,7 @@ class WemcConfigPanelScreen(
             ConfigTab.AI_MODEL -> buildAiModelTab()
             ConfigTab.AGENT -> buildAgentTab()
             ConfigTab.COMMANDS -> buildCommandsTab()
+            ConfigTab.TOOLS -> buildToolsTab()
             ConfigTab.WORLDEDIT -> buildWorldEditTab()
         }
     }
@@ -107,35 +124,26 @@ class WemcConfigPanelScreen(
     // ═══════════════════════════════════════════════════════════════════════
     private fun buildAiModelTab() {
         var y = panelFirstRowY
-        var totalH = 0
 
-        // Provider
-        addContentLabel("Provider", y); y += 14; totalH += 14
-        addContentWidget(Button.builder(Component.literal(providerLabel(settings.selectedProvider))) { cycleProvider() }
-            .bounds(innerLeft, y, innerW, 20).build(), y); y += 24; totalH += 24
+        // ── Row: Provider label + provider dropdown ──────────────────────
+        addContentLabel("Provider", y)
+        buildProviderDropdown(y)
+        y += 26
 
-        // Model
-        addContentLabel("Model", y); y += 14; totalH += 14
-        modelField = EditBox(font, innerLeft, y, innerW - 100, 18, Component.literal("")).apply {
-            setMaxLength(16_384)
-            value = selectedModel()
-        }
-        addContentWidget(modelField!!, y)
-        addContentWidget(Button.builder(Component.literal("Load")) { loadModels() }.bounds(innerLeft + innerW - 96, y, 44, 18).build(), y)
-        addContentWidget(Button.builder(Component.literal("Next")) { nextModel() }.bounds(innerLeft + innerW - 48, y, 44, 18).build(), y)
-        y += 24; totalH += 24
+        // ── Row: Model label + model dropdown + Refresh button ──────────
+        addContentLabel("Model", y)
+        buildModelDropdown(y)
+        y += 26
 
-        // Approval
-        addContentLabel("Approval", y); y += 14; totalH += 14
+        // ── Row: Approval button (full width) ────────────────────────────
         addContentWidget(Button.builder(approvalLabel(settings.approvalMode)) { cycleApproval() }
-            .bounds(innerLeft, y, innerW, 20).build(), y); y += 24; totalH += 24
+            .bounds(innerLeft, y, innerW, 20).build(), y)
+        y += 24
 
-        // API Key
-        addContentLabel("API Key", y); y += 14; totalH += 14
+        // ── Row: API Key label + textbox + Show/Hide button ──────────────
+        addContentLabel("API Key", y)
         val keyFw = if (showSecrets) innerW - 52 else innerW - 48
         apiKeyField = EditBox(font, innerLeft, y, keyFw, 18, Component.literal("")).apply {
-            // EditBox defaults to 32 characters. Configure the limit before
-            // assigning the persisted key so loading cannot truncate it.
             setMaxLength(512)
             value = currentApiKey()
             setHint(Component.literal(keyHint()))
@@ -148,39 +156,49 @@ class WemcConfigPanelScreen(
         addContentWidget(apiKeyField!!, y)
         addContentWidget(
             Button.builder(Component.literal(if (showSecrets) "Hide" else "Show")) { toggleSecrets() }
-                .bounds(innerLeft + keyFw + 4, y, if (showSecrets) 48 else 44, 18).build(), y)
-        y += 24; totalH += 24
+                .bounds(innerLeft + keyFw + 4, y, if (showSecrets) 48 else 44, 18).build(),
+            y
+        )
+        y += 24
 
-        // Base URL
-        addContentLabel("Base URL", y); y += 14; totalH += 14
+        // ── Row: Base URL textbox (full width) ───────────────────────────
         baseUrlField = EditBox(font, innerLeft, y, innerW, 18, Component.literal("")).apply {
             setMaxLength(16_384)
             value = currentBaseUrl()
             setHint(Component.literal(urlHint()))
         }
-        addContentWidget(baseUrlField!!, y); y += 24; totalH += 24
+        addContentWidget(baseUrlField!!, y)
+        y += 24
 
-        // Context Window | Max Output (two independent columns)
-        val columnGap = 12
-        val columnWidth = (innerW - columnGap) / 2
-        addContentLabel("Context Window", innerLeft, y)
-        addContentLabel("Max Output", innerLeft + columnWidth + columnGap, y)
-        y += 14; totalH += 14
-        contextWindowField = EditBox(font, innerLeft, y, columnWidth, 18, Component.literal("")).apply {
-            setMaxLength(16_384)
+        // ── Compact row: Context Window | Max Output ─────────────────────
+        // Left: "Context Window" label + textbox; Right: "Max Output" label + textbox.
+        // Each side is label(58px) + box(remaining), separated by a 6px gap.
+        val colGap = 6
+        val leftLabelW = 62
+        val rightLabelW = 56
+        val leftBoxW = innerW - leftLabelW - colGap - rightLabelW
+        val rightBoxW = leftBoxW
+
+        addContentLabel("Context Window", innerLeft, y, 0xFF888888.toInt())
+        addContentLabel("Max Output", innerLeft + leftLabelW + leftBoxW + colGap, y, 0xFF888888.toInt())
+        y += 12
+
+        contextWindowField = EditBox(font, innerLeft, y, leftBoxW, 18, Component.literal("Context tokens")).apply {
+            setMaxLength(16)
             value = settings.contextWindow.toString()
         }
-        addContentWidget(contextWindowField!!, y)
-        maxOutputTokensField = EditBox(font, innerLeft + columnWidth + columnGap, y, columnWidth, 18, Component.literal("")).apply {
-            setMaxLength(16_384)
+        maxOutputTokensField = EditBox(font, innerLeft + leftLabelW + leftBoxW + colGap, y, rightBoxW, 18, Component.literal("Max output")).apply {
+            setMaxLength(16)
             value = settings.maxOutputTokens.toString()
         }
-        addContentWidget(maxOutputTokensField!!, y); y += 24; totalH += 24
+        addContentWidget(contextWindowField!!, y)
+        addContentWidget(maxOutputTokensField!!, y)
+        y += 24
 
         // Status
         statusMessage?.let {
             addContentLabel(it, y, if (statusIsError) 0xFFFF5555.toInt() else 0xFF55FF55.toInt())
-            y += 16; totalH += 16
+            y += 16
         }
 
         setPanelContentHeight(y)
@@ -352,6 +370,71 @@ class WemcConfigPanelScreen(
         setPanelContentHeight(y)
     }
 
+    // ═══════════════════════════════════════════════════════════════════════
+    // Tab 5 — Tools
+    // ═══════════════════════════════════════════════════════════════════════
+    private fun buildToolsTab() {
+        var y = panelFirstRowY
+
+        addContentLabel("Provider-hosted capabilities", y, 0xFFFFFFFF.toInt())
+        y += 18
+        addContentLabel(
+            "WEMC uses the selected model provider for search and vision. No extra tool API key is stored.",
+            y, 0xFF888888.toInt()
+        )
+        y += 24
+
+        addContentLabel("Web Search", y); y += 14
+        val wsEnabled = settings.hostedWebSearchEnabled
+        addContentWidget(
+            Button.builder(
+                Component.literal(
+                    if (wsEnabled) "[ON] Provider-hosted web search" else "[OFF] Provider-hosted web search"
+                ).withStyle {
+                    it.withColor(TextColor.fromRgb(if (wsEnabled) 0xFF55FF55.toInt() else 0xFFFF5555.toInt()))
+                },
+            ) {
+                settings = settings.copy(hostedWebSearchEnabled = !wsEnabled)
+                rebuildScreen()
+            }.bounds(innerLeft, y, innerW, 20).build(), y
+        )
+        y += 24
+
+        addContentLabel(
+            "Uses POST /responses with tools:[{type:web_search}]. It reuses your configured provider key.",
+            y, 0xFF888888.toInt()
+        )
+        y += 32
+
+        addContentLabel("Image context", y, 0xFFFFFFFF.toInt())
+        y += 18
+        listOf(
+            "• /wemc chat screenshot <prompt> sends the current Minecraft view to the model.",
+            "• /wemc chat image <https-url> <prompt> sends one Internet reference image.",
+            "• Images are one-turn context only: no image is written to WEMC settings or history.",
+            "• Requires a vision-capable model and a provider that supports the Responses API.",
+        ).forEach { line ->
+            addContentLabel(line, y, 0xFFAAAAAA.toInt())
+            y += 16
+        }
+        y += 8
+
+        if (settings.selectedProvider in setOf(AiProvider.OPENAI, AiProvider.CUSTOM)) {
+            addContentLabel(
+                "Selected provider can use the hosted Responses path. Use Test to verify your gateway supports it.",
+                y, 0xFF55FF55.toInt()
+            )
+        } else {
+            addContentLabel(
+                "This provider remains on its native chat endpoint; hosted search and image context are unavailable.",
+                y, 0xFFFFAA00.toInt()
+            )
+        }
+        y += 18
+
+        setPanelContentHeight(y)
+    }
+
     // ── Bottom actions ────────────────────────────────────────────────────
     override fun buildBottomActions() {
         if (activeTab == ConfigTab.AI_MODEL) {
@@ -372,8 +455,30 @@ class WemcConfigPanelScreen(
         )
     }
 
+    // ── Dropdown overlay rendering ─────────────────────────────────────────
+    override fun render(graphics: GuiGraphics, mouseX: Int, mouseY: Int, delta: Float) {
+        super.render(graphics, mouseX, mouseY, delta)
+        // Render menus above the scroll panel and its fixed action bar.
+        providerDropdown?.renderOverlay(graphics, mouseX, mouseY, delta)
+        modelDropdown?.renderOverlay(graphics, mouseX, mouseY, delta)
+    }
+
+    override fun mouseClicked(event: MouseButtonEvent, bl: Boolean): Boolean {
+        val mouseX = event.x().toInt()
+        val mouseY = event.y().toInt()
+        if (providerDropdown?.mouseClicked(mouseX, mouseY) == true) return true
+        if (modelDropdown?.mouseClicked(mouseX, mouseY) == true) return true
+        return super.mouseClicked(event, bl)
+    }
+
     override fun onClose() {
         Minecraft.getInstance().setScreen(parent)
+    }
+
+    override fun onMouseScrolled(mouseX: Int, mouseY: Int, verticalAmount: Double): Boolean {
+        if (providerDropdown?.mouseScrolled(mouseX, mouseY, verticalAmount) == true) return true
+        if (modelDropdown?.mouseScrolled(mouseX, mouseY, verticalAmount) == true) return true
+        return false
     }
 
     // ── Reopen ───────────────────────────────────────────────────────────
@@ -392,6 +497,8 @@ class WemcConfigPanelScreen(
                 initialOpSettings = nextOpSettings,
                 initialTab = activeTab,
                 initialShowSecrets = showSecrets,
+                initialDiscoveredModels = discoveredModels,
+                initialModelIndex = modelIndex,
             )
         )
     }
@@ -462,10 +569,30 @@ class WemcConfigPanelScreen(
         AiProvider.COPILOT -> "Optional compatible gateway URL"
     }
 
-    // ── Actions ─────────────────────────────────────────────────────────
-    private fun cycleProvider() {
-        val next = AiProvider.entries[(settings.selectedProvider.ordinal + 1) % AiProvider.entries.size]
-        settings = OpenAiSettingsStore.withSelectedProvider(settings, next)
+    // ── Provider dropdown ─────────────────────────────────────────────────
+    private fun buildProviderDropdown(localY: Int) {
+        val labelW = 68
+        val names = AiProvider.entries.map(::providerLabel)
+        val dropdown = DropdownWidget(
+            options = names,
+            initialSelected = providerLabel(settings.selectedProvider),
+            onSelect = { name ->
+                AiProvider.entries.firstOrNull { providerLabel(it) == name }?.let(::selectProvider)
+            },
+            maxDisplayWidth = innerW - labelW,
+        )
+        dropdown.setWidth(innerW - labelW)
+        dropdown.setPosition(innerLeft + labelW, localY)
+        providerDropdown = dropdown
+        addContentWidget(dropdown.triggerButton, localY)
+    }
+
+    private fun selectProvider(provider: AiProvider) {
+        if (provider == settings.selectedProvider) return
+        settings = OpenAiSettingsStore.withSelectedProvider(settings, provider)
+        // The selected provider owns a distinct catalog and remembered model.
+        discoveredModels = emptyList()
+        modelIndex = 0
         reopen()
     }
 
@@ -549,6 +676,37 @@ class WemcConfigPanelScreen(
         reopen(message = "Command permissions reset to defaults.")
     }
 
+    // ── Model dropdown ───────────────────────────────────────────────────
+    private fun buildModelDropdown(localY: Int) {
+        val labelW = 50
+        val refreshW = 68
+        val dropdownW = innerW - labelW - refreshW - 4
+        val currentModel = selectedModel()
+        val options = discoveredModels.ifEmpty { listOf(currentModel).filter { it.isNotBlank() } }
+        val dropdown = DropdownWidget(
+            options = options,
+            initialSelected = currentModel,
+            onSelect = { selected -> onModelSelected(selected) },
+            maxDisplayWidth = dropdownW,
+        )
+        dropdown.setWidth(dropdownW)
+        dropdown.setPosition(innerLeft + labelW, localY)
+        modelDropdown = dropdown
+        addContentWidget(dropdown.triggerButton, localY)
+
+        // Refresh button (fetches the active provider's model catalog)
+        addContentWidget(
+            Button.builder(Component.literal("Refresh")) { loadModels() }
+                .bounds(innerLeft + labelW + dropdownW + 4, localY, refreshW, 20).build(),
+            localY
+        )
+    }
+
+    private fun onModelSelected(model: String) {
+        settings = withSelectedModel(settings, model)
+        modelIndex = discoveredModels.indexOf(model).coerceAtLeast(0)
+    }
+
     private fun loadModels() {
         settings = collectAiSettings()
         AiModelCatalog.fetch(settings, settings.selectedProvider).thenAccept { result ->
@@ -556,9 +714,14 @@ class WemcConfigPanelScreen(
                 when (result) {
                     is ModelCatalogResult.Success -> {
                         val models = result.models.map { it.id }
-                        val selected = selectedModel().takeIf { it in models } ?: models.firstOrNull().orEmpty()
+                        val current = selectedModel()
+                        val validSelection = current.takeIf { it in models } ?: models.firstOrNull().orEmpty()
                         discoveredModels = models
-                        reopen(nextSettings = withSelectedModel(settings, selected), message = "Loaded ${models.size} models.")
+                        modelIndex = models.indexOf(validSelection).coerceAtLeast(0)
+                        reopen(
+                            nextSettings = withSelectedModel(settings, validSelection),
+                            message = "Loaded ${models.size} models.",
+                        )
                     }
                     is ModelCatalogResult.Failure -> {
                         reopen(message = result.message, isError = true)
@@ -566,17 +729,6 @@ class WemcConfigPanelScreen(
                 }
             }
         }
-    }
-
-    private fun nextModel() {
-        if (discoveredModels.isEmpty()) {
-            reopen(message = "Click 'Load' to fetch models first.", isError = true)
-            return
-        }
-        val current = modelField?.value.orEmpty()
-        val idx = discoveredModels.indexOf(current).takeIf { it >= 0 } ?: -1
-        val next = discoveredModels[(idx + 1) % discoveredModels.size]
-        reopen(nextSettings = withSelectedModel(settings, next))
     }
 
     private fun testConnection() {
@@ -602,7 +754,7 @@ class WemcConfigPanelScreen(
     }
 
     private fun collectAiSettings(): OpenAiSettings {
-        val model = modelField?.value.orEmpty().trim()
+        val model = modelDropdown?.selected.orEmpty().trim()
         val apiKey = apiKeyField?.value.orEmpty()
         val baseUrl = baseUrlField?.value.orEmpty()
         val ctxWindow = (contextWindowField?.value?.toIntOrNull() ?: settings.contextWindow).coerceIn(1024, 2_000_000)

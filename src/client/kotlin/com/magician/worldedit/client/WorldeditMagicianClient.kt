@@ -19,6 +19,7 @@ import com.magician.worldedit.client.command.AgentOperationSettingsStore
 import com.magician.worldedit.client.command.AgentResponsePresentation
 import com.magician.worldedit.client.command.FlowParseResult
 import com.magician.worldedit.client.command.FlowResponseParser
+import com.magician.worldedit.client.command.FlowRequestQueue
 import com.magician.worldedit.client.command.MinecraftCommandExecutor
 import com.magician.worldedit.client.command.MinecraftCommandWhitelist
 import com.magician.worldedit.client.command.wcl.WclResult
@@ -30,18 +31,31 @@ import com.magician.worldedit.client.config.AiResponseCache
 import com.magician.worldedit.client.config.ApprovalMode
 import com.magician.worldedit.client.config.ChatTurn
 import com.magician.worldedit.client.config.ModelCatalogResult
+import com.magician.worldedit.client.config.AiImageInput
+import com.magician.worldedit.client.config.HostedRequestCapabilities
+import com.magician.worldedit.client.config.HostedResponsesRequestFactory
+import com.magician.worldedit.client.config.MinecraftImageContext
 import com.magician.worldedit.client.config.OpenAiSettings
 import com.magician.worldedit.client.config.OpenAiSettingsStore
 import com.magician.worldedit.client.config.PlayerStateShortEncoder
+
 import com.magician.worldedit.client.config.WemcSessionManager
 import com.magician.worldedit.client.config.WorldEditInstallationChecker
 import com.magician.worldedit.client.screen.WemcConfigPanelScreen
 import com.magician.worldedit.client.screen.WorldEditConfigurationScreen
 import com.mojang.brigadier.Command
+import com.mojang.brigadier.CommandDispatcher
+import java.util.concurrent.CompletableFuture
 import com.mojang.brigadier.arguments.StringArgumentType
+import com.mojang.brigadier.suggestion.Suggestion
+import com.mojang.brigadier.suggestion.Suggestions
+import com.mojang.brigadier.suggestion.SuggestionsBuilder
+import com.mojang.brigadier.suggestion.SuggestionProvider
 import com.mojang.blaze3d.platform.InputConstants
 import net.fabricmc.api.ClientModInitializer
 import net.fabricmc.fabric.api.client.command.v2.ClientCommandRegistrationCallback
+import net.fabricmc.fabric.api.client.command.v2.ClientCommandManager
+import net.fabricmc.fabric.api.client.command.v2.FabricClientCommandSource
 import net.fabricmc.fabric.api.client.command.v2.ClientCommandManager.argument
 import net.fabricmc.fabric.api.client.command.v2.ClientCommandManager.literal
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents
@@ -61,6 +75,8 @@ import org.lwjgl.glfw.GLFW
 
 object WorldeditMagicianClient : ClientModInitializer {
     private var activeFlow: ActiveFlow? = null
+    private val flowRequestQueue = FlowRequestQueue()
+    private var COMMAND_DISPATCHER: CommandDispatcher<*>? = null
     private val generalCategory = KeyMapping.Category.register(WorldeditMagician.id("general"))
     private val worldeditCategory = KeyMapping.Category.register(WorldeditMagician.id("worldedit"))
 
@@ -103,6 +119,7 @@ object WorldeditMagicianClient : ClientModInitializer {
     override fun onInitializeClient() {
         WorldEditInstallationChecker.checkAtStartup()
         ClientCommandRegistrationCallback.EVENT.register { dispatcher, _ ->
+            COMMAND_DISPATCHER = dispatcher
             dispatcher.register(wemcCommand())
             dispatcher.register(
                 literal("worldeditmagician")
@@ -221,7 +238,38 @@ object WorldeditMagicianClient : ClientModInitializer {
                     Command.SINGLE_SUCCESS
                 }))
                 .then(literal("history").executes { listExecutedCommands(); Command.SINGLE_SUCCESS })
-                .then(literal("wcl-history").executes { listWclHistory(); Command.SINGLE_SUCCESS }),
+                .then(literal("wcl-history").executes { listWclHistory(); Command.SINGLE_SUCCESS })
+                .then(literal("run").then(
+                    argument("cmd", StringArgumentType.greedyString())
+                        .suggests { builder, _ ->
+                            val dispatcher = COMMAND_DISPATCHER
+                            if (dispatcher == null) {
+                                return@suggests CompletableFuture.completedFuture(
+                                    com.mojang.brigadier.suggestion.Suggestions.create("", emptyList()))
+                            }
+                            val suggestions = java.util.ArrayList<com.mojang.brigadier.suggestion.Suggestion>()
+                            val input = builder.input
+                            val range = builder.range
+                            for (node in dispatcher.root.children) {
+                                val lit = (node as? com.mojang.brigadier.tree.LiteralCommandNode<*>)?.literal
+                                if (lit != null && lit.isNotEmpty()) {
+                                    suggestions.add(com.mojang.brigadier.suggestion.Suggestion(range, lit))
+                                }
+                            }
+                            CompletableFuture.completedFuture(
+                                com.mojang.brigadier.suggestion.Suggestions.create(input, suggestions))
+                        }
+                        .executes { context ->
+                            val cmd = StringArgumentType.getString(context, "cmd")
+                            if (cmd.isBlank()) {
+                                sendMessage("Usage: /wemc command run <command>")
+                                return@executes Command.SINGLE_SUCCESS
+                            }
+                            val result = MinecraftCommandExecutor.executeSingleGated(cmd.trim())
+                            sendMessage(result)
+                            Command.SINGLE_SUCCESS
+                        }
+                )),
         )
         .then(
             literal("provider")
@@ -245,6 +293,17 @@ object WorldeditMagicianClient : ClientModInitializer {
                         .then(literal("reinit").executes { reinitChatSession(); Command.SINGLE_SUCCESS })
                         .then(literal("status").executes { showChatStatus(); Command.SINGLE_SUCCESS })
                         .then(literal("history").executes { showChatHistory(); Command.SINGLE_SUCCESS })
+                        .then(literal("screenshot").then(argument("prompt", StringArgumentType.greedyString()).executes { context ->
+                            sendScreenshotPrompt(StringArgumentType.getString(context, "prompt"))
+                            Command.SINGLE_SUCCESS
+                        }))
+                        .then(literal("image").then(argument("url", StringArgumentType.string()).then(argument("prompt", StringArgumentType.greedyString()).executes { context ->
+                            sendImagePrompt(
+                                StringArgumentType.getString(context, "url"),
+                                StringArgumentType.getString(context, "prompt"),
+                            )
+                            Command.SINGLE_SUCCESS
+                        })))
                         .then(
                             literal("cache")
                                 .then(literal("status").executes { showCacheStatus(); Command.SINGLE_SUCCESS })
@@ -267,20 +326,19 @@ object WorldeditMagicianClient : ClientModInitializer {
             literal("flow")
                 .then(literal("approve").executes { approveFlowQuery(); Command.SINGLE_SUCCESS })
                 .then(literal("cancel").executes { cancelFlow(); Command.SINGLE_SUCCESS })
-                .then(literal("status").executes { showFlowStatus(); Command.SINGLE_SUCCESS }),
+                .then(literal("interrupt").executes { interruptFlow(); Command.SINGLE_SUCCESS })
+                .then(literal("status").executes { showFlowStatus(); Command.SINGLE_SUCCESS })
+                .then(literal("state").executes { showFlowStatus(); Command.SINGLE_SUCCESS })
+                .then(literal("discard").executes { discardQueuedFlowPrompt(); Command.SINGLE_SUCCESS })
+                .then(literal("edit").then(argument("prompt", StringArgumentType.greedyString()).executes { context ->
+                    editQueuedFlowPrompt(StringArgumentType.getString(context, "prompt"))
+                    Command.SINGLE_SUCCESS
+                })),
         )
         .then(
             literal("approval")
                 .then(literal("ask").executes { setApproval(ApprovalMode.ASK); Command.SINGLE_SUCCESS })
                 .then(literal("approve").executes { setApproval(ApprovalMode.APPROVE); Command.SINGLE_SUCCESS }),
-        )
-        .then(
-            literal("run").then(argument("cmd", StringArgumentType.greedyString()).executes { context ->
-                val cmd = StringArgumentType.getString(context, "cmd")
-                val result = MinecraftCommandExecutor.executeSingleGated(cmd)
-                sendMessage(result)
-                Command.SINGLE_SUCCESS
-            }),
         )
         // Debug/info commands for agent context
         .then(
@@ -418,17 +476,92 @@ object WorldeditMagicianClient : ClientModInitializer {
         val settings = OpenAiSettingsStore.load()
         val operation = AgentOperationSettingsStore.load()
         if (operation.mode == AgentOperationMode.FLOW && activeFlow != null) {
-            sendMessage("A flow is already active. Use /wemc flow approve, /wemc flow status, or /wemc flow cancel.")
+            when (flowRequestQueue.enqueue(prompt)) {
+                FlowRequestQueue.EnqueueResult.Queued -> sendMessage("[WEMC] A flow request is active. Your message was queued. Use /wemc flow state, /wemc flow interrupt, /wemc flow edit <msg>, or /wemc flow discard.")
+                FlowRequestQueue.EnqueueResult.AlreadyQueued -> sendMessage("[WEMC] A flow request is already queued. Use /wemc flow state, /wemc flow interrupt, /wemc flow edit <msg>, or /wemc flow discard.")
+            }
             return
         }
         if (operation.mode == AgentOperationMode.FLOW) {
-            val flow = ActiveFlow(prompt, settings, AgentFlowController(operation))
-            activeFlow = flow
-            flow.controller.start()
-            sendFlowRequest(flow, prompt)
+            startFlow(prompt, settings)
         } else {
             sendSinglePrompt(settings, prompt)
         }
+    }
+
+    private fun sendScreenshotPrompt(prompt: String) {
+        if (prompt.isBlank()) {
+            sendMessage("Usage: /wemc chat screenshot <prompt>")
+            return
+        }
+        sendMessage("Capturing the current Minecraft view for the agent...")
+        MinecraftImageContext.captureCurrentView { result ->
+            Minecraft.getInstance().execute {
+                result.fold(
+                    onSuccess = { image -> sendVisualPrompt(prompt, image) },
+                    onFailure = { error -> sendMessage("Could not capture screenshot: ${error.message}") },
+                )
+            }
+        }
+    }
+
+    private fun sendImagePrompt(rawUrl: String, prompt: String) {
+        val imageUrl = AiImageInput.httpsUrlOrNull(rawUrl)
+        if (imageUrl == null) {
+            sendMessage("Image URL must be a fully qualified HTTPS URL.")
+            return
+        }
+        if (prompt.isBlank()) {
+            sendMessage("Usage: /wemc chat image \"https://example.com/image.png\" <prompt>")
+            return
+        }
+        sendVisualPrompt(prompt, imageUrl)
+    }
+
+    private fun sendVisualPrompt(prompt: String, imageUrl: String) {
+        val settings = OpenAiSettingsStore.load()
+        val session = WemcSessionManager.current()
+        if (session == null) {
+            sendMessage("No active chat session. Run /wemc chat init first.")
+            return
+        }
+        if (!HostedResponsesRequestFactory.supports(settings)) {
+            sendMessage("The selected provider does not expose the Responses API required for image input.")
+            return
+        }
+        sendMessage("Sending visual context to ${providerId(settings.selectedProvider)}...")
+        val userMessage = PlayerStateShortEncoder.wrapPlayerRequest(prompt)
+        AiChatClient.send(
+            settings = settings,
+            prompt = prompt,
+            operationMode = AgentOperationMode.SINGLE,
+            thinkingMode = ExtendedThinkingMode.OFF,
+            systemPrompt = session.systemPrompt,
+            history = session.history.toList(),
+            capabilities = HostedRequestCapabilities(
+                webSearchEnabled = settings.hostedWebSearchEnabled,
+                imageInputs = listOf(imageUrl),
+            ),
+        ).thenAccept { result ->
+            Minecraft.getInstance().execute {
+                when (result) {
+                    is AiChatResult.Success -> {
+                        WemcSessionManager.recordTurn(
+                            ChatTurn(userContent = userMessage, assistantContent = result.answer)
+                        )
+                        displayAndSubmitAgentAnswer(result.answer, settings.approvalMode, singleMode = true)
+                    }
+                    is AiChatResult.Failure -> sendMessage(result.message)
+                }
+            }
+        }
+    }
+
+    private fun startFlow(prompt: String, settings: OpenAiSettings = OpenAiSettingsStore.load()) {
+        val flow = ActiveFlow(prompt, settings, AgentFlowController(AgentOperationSettingsStore.load()))
+        activeFlow = flow
+        flow.controller.start()
+        sendFlowRequest(flow, prompt)
     }
 
     private fun sendSinglePrompt(settings: OpenAiSettings, prompt: String) {
@@ -446,6 +579,7 @@ object WorldeditMagicianClient : ClientModInitializer {
                 thinkingMode = ExtendedThinkingMode.OFF,
                 systemPrompt = session.systemPrompt,
                 history = session.history.toList(),
+                capabilities = HostedRequestCapabilities(webSearchEnabled = settings.hostedWebSearchEnabled),
             ).thenAccept { result ->
                 Minecraft.getInstance().execute {
                     when (result) {
@@ -538,7 +672,14 @@ object WorldeditMagicianClient : ClientModInitializer {
 
     private fun sendFlowRequest(flow: ActiveFlow, prompt: String) {
         val thinkingMode = flow.controller.thinkingModeForStep()
-        AiChatClient.send(flow.settings, prompt, AgentOperationMode.FLOW, thinkingMode).thenAccept { result ->
+        sendMessage("[WEMC] Sending flow request to ${providerId(flow.settings.selectedProvider)}...")
+        AiChatClient.send(
+            flow.settings,
+            prompt,
+            AgentOperationMode.FLOW,
+            thinkingMode,
+            capabilities = HostedRequestCapabilities(webSearchEnabled = flow.settings.hostedWebSearchEnabled),
+        ).thenAccept { result ->
             Minecraft.getInstance().execute {
                 if (activeFlow !== flow) return@execute
                 when (result) {
@@ -701,9 +842,43 @@ object WorldeditMagicianClient : ClientModInitializer {
         else finishFlow(activeFlow!!, "Flow cancelled.")
     }
 
+    private fun interruptFlow() {
+        val queuedPrompt = flowRequestQueue.take()
+        if (queuedPrompt == null) {
+            sendMessage("[WEMC] No queued message to interrupt to.")
+            return
+        }
+        if (activeFlow == null) {
+            startFlow(queuedPrompt)
+            sendMessage("[WEMC] Queued message sent.")
+            return
+        }
+        activeFlow = null
+        sendMessage("[WEMC] Active flow interrupted. Its eventual response will be discarded.")
+        startFlow(queuedPrompt)
+    }
+
+    private fun editQueuedFlowPrompt(prompt: String) {
+        when (flowRequestQueue.edit(prompt)) {
+            FlowRequestQueue.EditResult.Edited -> sendMessage("[WEMC] Queued message updated.")
+            FlowRequestQueue.EditResult.Empty -> sendMessage("[WEMC] No queued message to edit.")
+        }
+    }
+
+    private fun discardQueuedFlowPrompt() {
+        if (flowRequestQueue.discard() == null) sendMessage("[WEMC] No queued message to discard.")
+        else sendMessage("[WEMC] Queued message discarded.")
+    }
+
     private fun showFlowStatus() {
-        if (activeFlow == null) sendMessage("No active flow.")
-        else sendMessage("A flow is active. If a plan was proposed, use /wemc flow approve to accept it, or /wemc flow cancel. Otherwise commands are auto-executing.")
+        val flow = activeFlow
+        val queuedPrompt = flowRequestQueue.peek()
+        if (flow == null && queuedPrompt == null) {
+            sendMessage("No active flow and no queued message.")
+        } else {
+            if (flow != null) sendMessage("[WEMC] A flow is active. Use /wemc flow approve for a proposed plan or /wemc flow cancel to stop it.")
+            if (queuedPrompt != null) sendMessage("[WEMC] Queued message: ${queuedPrompt.take(160)}")
+        }
     }
 
     private fun setOperationMode(mode: AgentOperationMode) {
@@ -729,6 +904,10 @@ object WorldeditMagicianClient : ClientModInitializer {
         if (flow != null && activeFlow !== flow) return
         activeFlow = null
         message?.let(::sendMessage)
+        flowRequestQueue.take()?.let { queuedPrompt ->
+            sendMessage("[WEMC] Previous flow finished. Sending the queued message.")
+            startFlow(queuedPrompt)
+        }
     }
 
     private data class ActiveFlow(

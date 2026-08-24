@@ -30,7 +30,7 @@ abstract class TabbedScrollablePanelScreen<T : Enum<T>>(
     private var draggingScrollbar = false
     private var scrollbarGrabOffset = 0
 
-    protected val panelWidth: Int get() = (width - 48).coerceIn(360, 560)
+    protected val panelWidth: Int get() = (width - 32).coerceAtLeast(1).coerceAtMost(620)
     protected val panelLeft: Int get() = (width - panelWidth) / 2
     protected val panelRight: Int get() = panelLeft + panelWidth
     protected val headerBottomY: Int get() = 64
@@ -54,6 +54,9 @@ abstract class TabbedScrollablePanelScreen<T : Enum<T>>(
     protected open fun buildBottomActions() {}
     protected open fun beforeTabChange(from: T, to: T) {}
     protected open fun panelTitle(): Component = title
+
+    /** Override in subclasses to support wheel-event containment for open dropdown overlays. */
+    protected open fun onMouseScrolled(mouseX: Int, mouseY: Int, verticalAmount: Double): Boolean = false
 
     override fun init() {
         rebuildScreen()
@@ -102,8 +105,10 @@ abstract class TabbedScrollablePanelScreen<T : Enum<T>>(
     }
 
     private fun buildTabs() {
-        val buttonWidth = 80
         val gap = 4
+        val horizontalMargin = 12
+        val availableWidth = (width - horizontalMargin * 2 - gap * (tabs.size - 1)).coerceAtLeast(tabs.size)
+        val buttonWidth = (availableWidth / tabs.size).coerceAtLeast(1)
         val rowWidth = tabs.size * buttonWidth + (tabs.size - 1) * gap
         val rowLeft = (width - rowWidth) / 2
         tabs.forEachIndexed { index, tab ->
@@ -172,10 +177,12 @@ abstract class TabbedScrollablePanelScreen<T : Enum<T>>(
     }
 
     override fun mouseScrolled(mouseX: Double, mouseY: Double, horizontalAmount: Double, verticalAmount: Double): Boolean {
-        if (mouseX !in panelLeft.toDouble()..panelRight.toDouble() || mouseY !in contentTopY.toDouble()..contentBottomY.toDouble()) return false
-        val maxScroll = maxScrollOffset()
-        if (maxScroll >= 0) return false
-        scrollOffset = (scrollOffset + (verticalAmount * 18).toInt()).coerceIn(maxScroll, 0)
+        val lx = mouseX.toInt()
+        val ly = mouseY.toInt()
+        if (onMouseScrolled(lx, ly, verticalAmount)) return true
+        if (lx !in panelLeft..panelRight || ly !in contentTopY..contentBottomY) return false
+        if (maxScrollOffset() >= 0) return false
+        scrollOffset = (scrollOffset + (verticalAmount * 18).toInt()).coerceIn(maxScrollOffset(), 0)
         positionPanelWidgets()
         return true
     }

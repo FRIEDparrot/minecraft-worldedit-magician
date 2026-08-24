@@ -115,11 +115,11 @@ These are **help messages**, not query implementations.
 
 ---
 
-## `/wemc run <cmd>` — Execute a whitelisted command directly
+## `/wemc command run <cmd>` — Execute a command directly through the blacklist gate
 
 || Command | Effect ||
 |---|---|---|
-| `/wemc run setblock ~ ~64 ~ stone` | Executes the command through the whitelist directly (no AI) |
+| `/wemc command run setblock ~ ~64 ~ stone` | Executes the command with full vanilla autocomplete, minus blocked roots |
 
 ---
 

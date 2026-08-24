@@ -82,6 +82,9 @@ data class OpenAiSettings(
     val copilotEndpoint: String = CopilotProviderSupport.DEFAULT_ENDPOINT,
     val copilotAccessToken: String = "",
     val copilotSelectedModel: String = CopilotProviderSupport.DEFAULT_SELECTED_MODEL,
+    // Web search is a user preference and reuses the selected provider key.
+    // Image inputs are one-turn context and are represented outside settings.
+    val hostedWebSearchEnabled: Boolean = false,
 ) {
     /** Compatibility alias for callers compiled against the original setting name. */
     val providerBaseUrl: String
@@ -167,6 +170,7 @@ object OpenAiSettingsStore {
                     copilotEndpoint = root.get("copilotEndpoint")?.asString ?: CopilotProviderSupport.DEFAULT_ENDPOINT,
                     copilotAccessToken = root.get("copilotAccessToken")?.asString ?: "",
                     copilotSelectedModel = root.get("copilotSelectedModel")?.asString ?: CopilotProviderSupport.DEFAULT_SELECTED_MODEL,
+                    hostedWebSearchEnabled = root.get("hostedWebSearchEnabled")?.asBoolean ?: false,
                 )
             }
         }.getOrDefault(OpenAiSettings())
@@ -248,6 +252,7 @@ object OpenAiSettingsStore {
             addProperty("copilotEndpoint", settings.copilotEndpoint.trim())
             addProperty("copilotAccessToken", settings.copilotAccessToken.trim())
             addProperty("copilotSelectedModel", settings.copilotSelectedModel.trim())
+            addProperty("hostedWebSearchEnabled", settings.hostedWebSearchEnabled)
         }
 
         Files.createDirectories(configPath.parent)

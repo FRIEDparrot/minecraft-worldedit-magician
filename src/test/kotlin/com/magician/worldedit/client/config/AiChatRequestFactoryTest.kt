@@ -4,9 +4,69 @@ import com.google.gson.JsonParser
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
 class AiChatRequestFactoryTest {
+    @Test
+    fun `hosted Responses request enables provider web search`() {
+        val settings = OpenAiSettings(
+            selectedProvider = AiProvider.OPENAI,
+            apiKey = "provider-key",
+            baseUrl = "https://gateway.example/v1",
+            openAiSelectedModel = "gpt-5.6",
+            maxOutputTokens = 512,
+        )
+        val request = HostedResponsesRequestFactory.create(
+            settings = settings,
+            prompt = "Find the current Minecraft release notes.",
+            thinkingMode = com.magician.worldedit.client.command.ExtendedThinkingMode.OFF,
+            systemPrompt = "[wemc/v1]",
+            history = emptyList(),
+            capabilities = HostedRequestCapabilities(webSearchEnabled = true),
+        )
+        val body = JsonParser.parseString(request.body).asJsonObject
+
+        assertEquals("https://gateway.example/v1/responses", request.url)
+        assertTrue(request.responsesApi)
+        assertEquals("gpt-5.6", body.get("model").asString)
+        assertEquals("web_search", body.getAsJsonArray("tools")[0].asJsonObject.get("type").asString)
+        assertEquals("web_search_call.action.sources", body.getAsJsonArray("include")[0].asString)
+        assertEquals("Find the current Minecraft release notes.", body.getAsJsonArray("input").last()
+            .asJsonObject.getAsJsonArray("content")[0].asJsonObject.get("text").asString)
+    }
+
+    @Test
+    fun `hosted Responses request carries HTTPS and base64 image inputs`() {
+        val settings = OpenAiSettings(
+            selectedProvider = AiProvider.OPENAI,
+            apiKey = "provider-key",
+            openAiSelectedModel = "gpt-5.6",
+        )
+        val dataUrl = AiImageInput.pngDataUrl(byteArrayOf(1, 2, 3))
+        val request = HostedResponsesRequestFactory.create(
+            settings = settings,
+            prompt = "Compare this reference with a Minecraft build.",
+            thinkingMode = com.magician.worldedit.client.command.ExtendedThinkingMode.OFF,
+            systemPrompt = null,
+            history = emptyList(),
+            capabilities = HostedRequestCapabilities(
+                imageInputs = listOf("http://insecure.example/a.png", "https://example.com/a.png", dataUrl),
+            ),
+        )
+        val content = JsonParser.parseString(request.body).asJsonObject
+            .getAsJsonArray("input").last().asJsonObject.getAsJsonArray("content")
+
+        assertEquals(3, content.size())
+        assertEquals("input_text", content[0].asJsonObject.get("type").asString)
+        assertEquals("input_image", content[1].asJsonObject.get("type").asString)
+        assertEquals("https://example.com/a.png", content[1].asJsonObject.get("image_url").asString)
+        assertEquals("input_image", content[2].asJsonObject.get("type").asString)
+        assertTrue(content[2].asJsonObject.get("image_url").asString.startsWith("data:image/png;base64,"))
+        assertNotNull(AiImageInput.httpsUrlOrNull("https://example.com/a.png"))
+        assertEquals(null, AiImageInput.httpsUrlOrNull("http://insecure.example/a.png"))
+    }
+
     @Test
     fun `OpenAI uses the configured compatible chat completions protocol`() {
         val request = AiChatRequestFactory.create(

@@ -18,9 +18,13 @@ system prompt for every request in that session.
 
 ## Long-Term Rules
 
-- Only use commands that appear in the whitelist for the current world.
-- Validate every command against the whitelist before returning it.
+- Use the post-compile blacklist gate to filter compiled Minecraft commands; the
+  WEMC blacklist blocks server/admin, persistence, function/schedule, and
+  command-block controls only — all ordinary vanilla commands are allowed.
+- Validate every command against the blacklist gate before sending.
 - Never send commands the player has not seen or approved.
+- Direct command (no AI): `/wemc command run <cmd>` — full vanilla autocomplete
+  via MC dispatcher, blacklisted roots stripped.
 - If the request is ambiguous, prefer the most common Minecraft command
   interpretation and respond briefly asking for clarification rather than
   guessing a specific coordinate or target.

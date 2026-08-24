@@ -130,7 +130,7 @@ All commands are registered via Fabric's client-command API (`ClientCommandRegis
 | `/wemc query time` | Print a hint message about the vanilla `/time query` syntax. The actual query logic (`TimeQueryHandler`) is not wired to this literal — use `/time query daytime` yourself. |
 | `/wemc query entity` | Print a hint message pointing you to `/data get entity …` (vanilla Java has no `/entity query`). The actual query logic (`EntityQueryHandler`) is not wired to this literal. |
 
-> `/wemc run` is registered as a branch literal but has **no** `.executes` handler. Typing it currently does nothing. Use `/wemc agent run` instead.
+> `/wemc command run` uses the vanilla command dispatcher for full autocomplete, minus blocked roots. Use `/wemc agent run` to execute a pending Single-mode batch.
 
 #### FLOW-mode controls
 
@@ -559,7 +559,7 @@ All bindings are also reachable via the in-game Controls menu.
 /worldeditmagician worldedit                   open WorldEdit installation screen
 ```
 
-> `/wemc run` is registered but has no handler — typing it currently does nothing.
+> `/wemc command run` uses the vanilla command dispatcher for full autocomplete, minus blocked roots.
 
 ---
 

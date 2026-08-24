@@ -24,7 +24,7 @@ For the deeper protocol and implementation reference, see [the command reference
 | AI command generation | Ask an AI to return a fenced `wcl` program. WEMC compiles its supported WCL subset into concrete vanilla commands. |
 | Command control | Block sensitive server/admin command families, keep a curated command catalog for agent guidance, queue Single-mode output for review, and retain session histories of generated WCL and commands actually sent. |
 | Flow execution | Run bounded multi-step AI workflows that can wait for server chat/game responses before asking the model for the next WCL step. |
-| Direct commands | Send one manually written command through the blacklist gate with `/wemc run <command>`. |
+| Direct commands | Send one manually written command through the blacklist gate with `/wemc command run <command>`. |
 
 ## How it works
 
@@ -217,7 +217,7 @@ Commands such as `/gamerule`, general `/tp` forms, `/execute ... run ...`, and m
 You can also issue one manual command through the blacklist gate without AI:
 
 ```mcfunction
-/wemc run time set noon
+/wemc command run time set noon
 ```
 
 This direct path still uses the blacklist gate, but intentionally bypasses the AI approval queue.
@@ -254,7 +254,7 @@ Each provider keeps a separate selected-model setting. Configuration is saved in
 | `/wemc command wcl-history` | Show generated WCL and compiled command counts from this session. |
 | `/wemc agent commands\|run\|discard` | Inspect, send, or discard the pending Single-mode command batch. |
 | `/wemc flow approve\|cancel\|status` | Control an active Flow workflow. |
-| `/wemc run <command>` | Send one manual command after blacklist validation. |
+| `/wemc command run <command>` | Send one manual command after blacklist validation. |
 | `/worldeditmagician config` | Legacy alias for the WEMC settings panel. |
 | `/worldeditmagician worldedit` | Open the WorldEdit detection/status screen. |
 

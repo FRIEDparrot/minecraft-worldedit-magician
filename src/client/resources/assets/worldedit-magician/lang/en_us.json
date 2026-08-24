@@ -10,7 +10,7 @@
   "screen.worldedit-magician.openai.testing.message": "Connecting to the selected provider...",
   "screen.worldedit-magician.openai.test_success.title": "Connection test succeeded",
   "screen.worldedit-magician.openai.test_failed.title": "Connection test failed",
-  "screen.worldedit-magician.config.title": "With Magician",
+  "screen.worldedit-magician.config.title": "WorldEdit Magician Configs",
   "screen.worldedit-magician.config.openai": "Open config panel",
   "screen.worldedit-magician.config.worldedit": "WorldEdit",
   "screen.worldedit-magician.worldedit.installed": "WorldEdit %s is installed",
