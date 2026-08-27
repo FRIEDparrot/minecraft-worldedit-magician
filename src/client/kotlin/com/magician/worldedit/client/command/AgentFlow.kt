@@ -303,7 +303,6 @@ class AgentFlowController(private val settings: AgentOperationSettings) {
     fun onAgentResponse(answer: String): AgentFlowAction {
         if (state != FlowState.AWAITING_AGENT) return AgentFlowAction.Noop
 
-        aiRequestCount++
         displayText = answer.trim()
 
         return when (val result = FlowResponseParser.parse(answer)) {
@@ -346,7 +345,6 @@ class AgentFlowController(private val settings: AgentOperationSettings) {
     fun approvePlan(nowMillis: Long): AgentFlowAction {
         if (state != FlowState.AWAITING_PLAN_APPROVAL) return AgentFlowAction.Noop
         planApproved = true
-        currentStep = 1
 
         val wcl = pendingPlanWcl
         val isEof = pendingPlanIsEof
@@ -354,11 +352,16 @@ class AgentFlowController(private val settings: AgentOperationSettings) {
         pendingPlanIsEof = false
 
         return if (wcl != null) {
+            currentStep = 1
             state = if (isEof) FlowState.COMPLETED else FlowState.EXECUTING
             AgentFlowAction.WclReady(wcl, displayText = null, isEof = isEof)
         } else {
-            // No commands bundled — just transition to EXECUTING and wait for agent response
-            state = FlowState.EXECUTING
+            if (aiRequestCount >= norm.maxAiRequests) {
+                return fail("AI request limit reached (${norm.maxAiRequests}).")
+            }
+            // The approval prompt sends the next request, so reserve it before accepting its response.
+            aiRequestCount++
+            state = FlowState.AWAITING_AGENT
             AgentFlowAction.PlanApprovedPrompt
         }
     }
@@ -454,6 +457,10 @@ class AgentFlowController(private val settings: AgentOperationSettings) {
     /** Called when WCL compilation fails on the client side. Returns WclCompilationFailed
      *  to send back to the agent, and transitions back to AWAITING_AGENT. */
     fun onWclCompilationError(errorMsg: String): AgentFlowAction {
+        if (aiRequestCount >= norm.maxAiRequests) {
+            return fail("AI request limit reached (${norm.maxAiRequests}).")
+        }
+        aiRequestCount++
         state = FlowState.AWAITING_AGENT
         return AgentFlowAction.WclCompilationFailed(errorMsg)
     }

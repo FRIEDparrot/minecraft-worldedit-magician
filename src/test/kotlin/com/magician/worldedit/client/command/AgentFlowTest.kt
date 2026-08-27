@@ -153,12 +153,60 @@ reason: Need to clear area first
     }
 
     @Test
+    fun `one-request flow accepts the response to its initial request`() {
+        val controller = AgentFlowController(AgentOperationSettings(maxAiRequests = 1))
+        controller.start()
+
+        val action = controller.onAgentResponse("```wcl\nsetblock ~ ~ ~ stone\n```")
+
+        assertIs<AgentFlowAction.WclReady>(action)
+    }
+
+    @Test
+    fun `approval cannot dispatch another agent request after the request limit`() {
+        val controller = AgentFlowController(AgentOperationSettings(maxAiRequests = 1))
+        controller.start()
+        controller.onAgentResponse("```wemc-plan\nsteps: 2\nreason: test\n```")
+
+        val action = controller.approvePlan(System.currentTimeMillis())
+
+        assertIs<AgentFlowAction.Failed>(action)
+        assertTrue(action.message.contains("AI request limit reached"))
+    }
+
+    @Test
+    fun `compilation retry cannot dispatch another agent request after the request limit`() {
+        val controller = AgentFlowController(AgentOperationSettings(maxAiRequests = 1))
+        controller.start()
+        controller.onAgentResponse("```wcl\ninvalid WCL\n```")
+
+        val action = controller.onWclCompilationError("Invalid WCL")
+
+        assertIs<AgentFlowAction.Failed>(action)
+        assertTrue(action.message.contains("AI request limit reached"))
+    }
+
+    @Test
     fun `approvePlan returns PlanApprovedPrompt`() {
         val controller = AgentFlowController(AgentOperationSettings())
         controller.start()
         controller.onAgentResponse("```wemc-plan\nsteps: 2\nreason: test\n```")
         val action = controller.approvePlan(System.currentTimeMillis())
         assertIs<AgentFlowAction.PlanApprovedPrompt>(action)
+    }
+
+    @Test
+    fun `approved plan without bundled WCL accepts the next agent command`() {
+        val controller = AgentFlowController(AgentOperationSettings())
+        controller.start()
+        controller.onAgentResponse("```wemc-plan\nsteps: 2\nreason: test\n```")
+        controller.approvePlan(System.currentTimeMillis())
+
+        val action = controller.onAgentResponse("```wcl\nsetblock ~ ~ ~ stone\n```")
+
+        assertIs<AgentFlowAction.WclReady>(action)
+        assertTrue(action.wclSource.contains("setblock"))
+        assertEquals(1, controller.currentStepNumber())
     }
 
     @Test
