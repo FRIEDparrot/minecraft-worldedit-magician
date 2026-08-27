@@ -252,6 +252,16 @@ object AiChatResponseDecoder {
 object AiChatClient {
     private val httpClient = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(10)).build()
 
+    /**
+     * FLOW responses are deliberately never cached: they can depend on fresh server output,
+     * and cache hits must not consume or bypass the flow request budget.
+     */
+    fun canUseResponseCache(
+        operationMode: AgentOperationMode,
+        history: List<ChatTurn>,
+        capabilities: HostedRequestCapabilities,
+    ): Boolean = operationMode != AgentOperationMode.FLOW && history.isEmpty() && !capabilities.requiresResponsesApi
+
     fun send(
         settings: OpenAiSettings,
         prompt: String,
@@ -274,14 +284,14 @@ object AiChatClient {
             return failure(e.message ?: "Could not build AI request.")
         }
 
-        if (history.isEmpty() && !capabilities.requiresResponsesApi) {
+        if (canUseResponseCache(operationMode, history, capabilities)) {
             AiResponseCache.lookup(settings.selectedProvider, OpenAiSettingsStore.activeModel(settings), systemPrompt, contextualPrompt)
                 ?.let { return CompletableFuture.completedFuture(AiChatResult.Success(it.responseText, fromCache = true)) }
         }
 
         return sendRequest(request)
             .thenApply { result ->
-                if (history.isEmpty() && !capabilities.requiresResponsesApi && result is AiChatResult.Success && !result.fromCache) {
+                if (canUseResponseCache(operationMode, history, capabilities) && result is AiChatResult.Success && !result.fromCache) {
                     AiResponseCache.store(settings.selectedProvider, OpenAiSettingsStore.activeModel(settings), systemPrompt, contextualPrompt, result.answer)
                 }
                 result

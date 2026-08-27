@@ -9,6 +9,24 @@ import kotlin.test.assertTrue
 
 class AiChatRequestFactoryTest {
     @Test
+    fun `FLOW requests never use the response cache`() {
+        assertFalse(
+            AiChatClient.canUseResponseCache(
+                operationMode = com.magician.worldedit.client.command.AgentOperationMode.FLOW,
+                history = emptyList(),
+                capabilities = HostedRequestCapabilities(),
+            )
+        )
+        assertTrue(
+            AiChatClient.canUseResponseCache(
+                operationMode = com.magician.worldedit.client.command.AgentOperationMode.SINGLE,
+                history = emptyList(),
+                capabilities = HostedRequestCapabilities(),
+            )
+        )
+    }
+
+    @Test
     fun `hosted Responses request enables provider web search`() {
         val settings = OpenAiSettings(
             selectedProvider = AiProvider.OPENAI,

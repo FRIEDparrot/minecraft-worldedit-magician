@@ -61,7 +61,7 @@ Provider ids: `openai`, `ollama`, `claude`, `gemini`, `deepseek`, `minimax`, `mi
 ```
 
 - **SINGLE mode**: exactly one AI request; reply must contain one multi-line `wcl` program, which goes through compilation, approval, and execution. No automatic continuation.
-- **FLOW mode**: starts a bounded multi-step flow. The agent declares `steps:` in a `wemc-plan` block; you approve with `/wemc flow approve`; commands auto-execute; the controller feeds server responses back to the agent up to `maxAiRequests` × 30.
+- **FLOW mode**: starts a bounded multi-step flow. The agent declares `steps:` in a `wemc-plan` block; you approve with `/wemc flow approve`; commands auto-execute; the controller feeds server responses back to the agent until the configured AI-request cap (30 by default) or the separate server-step cap (50 by default) is reached.
 
 The agent's reply always includes a `Player state:` block (position, rotation, looking-at block, current chunk, selection mode, Y range, selected-chunk count) plus the current whitelist.
 
