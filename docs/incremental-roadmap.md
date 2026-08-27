@@ -2,18 +2,20 @@
 
 This roadmap intentionally keeps each milestone small enough to compile, test, and review independently. It is ordered around safe world interaction rather than attempting all builder features in one change.
 
-## Today — FLOW reliability
+## Completed today — operate/context-region foundation
 
-- Fix plan-only approval so the prompt sent after approval can be received and compiled as the next WCL step.
-- Count only dispatched AI requests against the configured request limit.
-- Preserve those guarantees with state-machine tests and correct the command reference.
+- Add pure, unit-tested `OperateRegion` and `ContextRegion` value types.
+- Keep confirmed torch chunks as the only writable `OperateRegion`; unconfirmed orange drafts never enter either agent region.
+- Derive the default `ContextRegion` by adding the eight surrounding chunks plus the selected chunk for every operate chunk, and five Y blocks above and below the operating band.
+- Enforce the safety invariant in the type API: a context must contain every operate chunk and Y level before a future read tool may use it.
+- Bound caller-supplied context margins and materialized chunk count; larger observation needs the later paged read design.
 
-## Next working day — explicit operate and context regions
+## Next working day — explicit operate and context selection interaction
 
-- Introduce pure, testable `OperateRegion` and `ContextRegion` value types.
-- Require every operate region to be contained in its context region.
-- Default a context region to the operate chunks expanded by one chunk in X/Z and by five blocks below and above the selected Y range.
-- Extend the torch selection interaction to choose whether the player is editing the operate region or the wider context region, with clear action-bar feedback before changing any command guard.
+- Add a torch target toggle between **OPERATE** and **CONTEXT**. The HUD must render the active target and show the operate region in blue, the read-only context in a visually distinct color, and drafts in orange.
+- Keep the default context derived until the player explicitly chooses CONTEXT; when a context draft is confirmed, reject it with actionable feedback unless it contains the full operate region.
+- Use a dedicated, rebindable key rather than overloading the existing operation/shape controls. The HUD hint must state the key and whether the displayed volume is writable or read-only.
+- Do not change command authorization in this UI change: only the operate region remains a write guard.
 
 ## Then — safe world observation for the agent
 

@@ -78,6 +78,28 @@ object ChunkSelectionState {
     /** Returns an immutable snapshot of confirmed chunks only, for command authorization. */
     fun confirmedSelectionSnapshot(): Set<ChunkPos> = selectedChunks.toSet()
 
+    /**
+     * Returns the precise region the agent may edit, or null until the torch
+     * selection has at least one confirmed chunk. Pending orange drafts are
+     * deliberately excluded.
+     */
+    fun confirmedOperateRegionOrNull(): OperateRegion? = selectedChunks
+        .takeIf { it.isNotEmpty() }
+        ?.let { OperateRegion(it.toSet(), config.minY, config.maxY) }
+
+    /**
+     * Returns the validated operate/context pair that future agent tools must
+     * consume. The result is absent until chunks are confirmed.
+     */
+    fun agentRegionScopeOrNull(): AgentRegionScope? = confirmedOperateRegionOrNull()?.let(AgentRegionScope::defaultFor)
+
+    /**
+     * Returns the default, wider read-only context for the confirmed operation
+     * region. This never includes a pending draft or grants additional write
+     * authority; it is input for the future observation tool only.
+     */
+    fun defaultContextRegionOrNull(): ContextRegion? = agentRegionScopeOrNull()?.context
+
     /** Applies an operation to a confirmed chunk set. */
     private fun applyToSelection(chunks: Set<ChunkPos>, operation: SelectionOperationMode): Boolean = when (operation) {
         SelectionOperationMode.REPLACE -> {
