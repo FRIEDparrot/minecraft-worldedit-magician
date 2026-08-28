@@ -1,5 +1,7 @@
 package com.magician.worldedit.client.chunk
 
+import java.util.Collections
+
 /**
  * The confirmed area that an agent is allowed to change.
  *
@@ -12,7 +14,7 @@ class OperateRegion(
     val maxY: Int,
 ) {
     /** Immutable snapshot of the confirmed writable chunk coordinates. */
-    val chunks: Set<ChunkPos> = chunks.toSet()
+    val chunks: Set<ChunkPos> = Collections.unmodifiableSet(chunks.toSet())
 
     init {
         require(this.chunks.isNotEmpty()) { "An operate region must contain at least one chunk." }
@@ -64,7 +66,7 @@ class ContextRegion(
     val maxY: Int,
 ) {
     /** Immutable snapshot of the read-only chunk coordinates. */
-    val chunks: Set<ChunkPos> = chunks.toSet()
+    val chunks: Set<ChunkPos> = Collections.unmodifiableSet(chunks.toSet())
 
     init {
         require(this.chunks.isNotEmpty()) { "A context region must contain at least one chunk." }

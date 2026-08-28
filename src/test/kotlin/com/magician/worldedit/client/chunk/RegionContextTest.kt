@@ -126,4 +126,17 @@ class RegionContextTest {
         assertTrue(ChunkSelectionState.confirmedOperateRegionOrNull() != null)
         assertNull(ChunkSelectionState.agentRegionScopeOrNull())
     }
+
+    @Test
+    fun `region chunk snapshots reject MutableSet casts`() {
+        val operate = OperateRegion(setOf(ChunkPos(0, 0)), minY = 0, maxY = 0)
+        val context = ContextRegion.defaultFor(operate)
+
+        assertFailsWith<UnsupportedOperationException> {
+            (operate.chunks as MutableSet<ChunkPos>).add(ChunkPos(1, 0))
+        }
+        assertFailsWith<UnsupportedOperationException> {
+            (context.chunks as MutableSet<ChunkPos>).clear()
+        }
+    }
 }
