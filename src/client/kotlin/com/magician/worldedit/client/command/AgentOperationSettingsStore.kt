@@ -22,6 +22,8 @@ object AgentOperationSettingsStore {
                     maxAiRequests = root.getInt("maxAiRequests", AgentOperationSettings.DEFAULT_MAX_AI_REQUESTS),
                     maxServerSteps = root.getInt("maxServerSteps", AgentOperationSettings.DEFAULT_MAX_SERVER_STEPS),
                     queryTimeoutSeconds = root.getInt("queryTimeoutSeconds", AgentOperationSettings.DEFAULT_QUERY_TIMEOUT_SECONDS),
+                    maxOperateChunks = root.getInt("maxOperateChunks", AgentOperationSettings.DEFAULT_MAX_OPERATE_CHUNKS),
+                    maxContextChunks = root.getInt("maxContextChunks", AgentOperationSettings.DEFAULT_MAX_CONTEXT_CHUNKS),
                     allowSelfPositionQuery = root.getBoolean("allowSelfPositionQuery", true),
                 ).normalized()
             }
@@ -35,6 +37,8 @@ object AgentOperationSettingsStore {
             addProperty("maxAiRequests", normalized.maxAiRequests)
             addProperty("maxServerSteps", normalized.maxServerSteps)
             addProperty("queryTimeoutSeconds", normalized.queryTimeoutSeconds)
+            addProperty("maxOperateChunks", normalized.maxOperateChunks)
+            addProperty("maxContextChunks", normalized.maxContextChunks)
             addProperty("allowSelfPositionQuery", normalized.allowSelfPositionQuery)
         }
         Files.createDirectories(configPath.parent)

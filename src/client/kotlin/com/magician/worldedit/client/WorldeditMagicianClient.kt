@@ -118,6 +118,9 @@ object WorldeditMagicianClient : ClientModInitializer {
 
     override fun onInitializeClient() {
         WorldEditInstallationChecker.checkAtStartup()
+        AgentOperationSettingsStore.load().let { settings ->
+            ChunkSelectionState.configureRegionLimits(settings.maxOperateChunks, settings.maxContextChunks)
+        }
         ClientCommandRegistrationCallback.EVENT.register { dispatcher, _ ->
             COMMAND_DISPATCHER = dispatcher
             dispatcher.register(wemcCommand())
@@ -890,6 +893,7 @@ object WorldeditMagicianClient : ClientModInitializer {
 
     /** Stop an active flow when the Agent panel disables Flow mode. */
     fun onAgentOperationSettingsSaved(settings: AgentOperationSettings) {
+        ChunkSelectionState.configureRegionLimits(settings.maxOperateChunks, settings.maxContextChunks)
         if (settings.mode == AgentOperationMode.SINGLE && activeFlow != null) {
             finishFlow(activeFlow!!, "Flow stopped because Flow mode was disabled.")
         }

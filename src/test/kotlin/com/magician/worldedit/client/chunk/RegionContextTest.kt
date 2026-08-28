@@ -1,11 +1,18 @@
 package com.magician.worldedit.client.chunk
 
+import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class RegionContextTest {
+    @AfterTest
+    fun resetSelectionState() {
+        ChunkSelectionState.reset()
+    }
+
     @Test
     fun `default context surrounds the operate chunks and Y range`() {
         val operate = OperateRegion(
@@ -100,5 +107,23 @@ class RegionContextTest {
         assertFailsWith<IllegalArgumentException> {
             ContextRegion(oversizedChunks, minY = 0, maxY = 0)
         }
+    }
+
+    @Test
+    fun `oversized confirmed operate selection returns controlled absence`() {
+        ChunkSelectionState.configureRegionLimits(maxOperateChunks = 1, maxContextChunks = 2)
+        ChunkSelectionState.selectedChunks.addAll(setOf(ChunkPos(0, 0), ChunkPos(1, 0)))
+
+        assertNull(ChunkSelectionState.confirmedOperateRegionOrNull())
+        assertNull(ChunkSelectionState.agentRegionScopeOrNull())
+    }
+
+    @Test
+    fun `context cap returns controlled absence when default neighborhood is too large`() {
+        ChunkSelectionState.configureRegionLimits(maxOperateChunks = 1, maxContextChunks = 8)
+        ChunkSelectionState.selectedChunks.add(ChunkPos(0, 0))
+
+        assertTrue(ChunkSelectionState.confirmedOperateRegionOrNull() != null)
+        assertNull(ChunkSelectionState.agentRegionScopeOrNull())
     }
 }

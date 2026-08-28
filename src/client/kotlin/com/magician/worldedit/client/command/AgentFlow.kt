@@ -190,15 +190,27 @@ data class AgentOperationSettings(
     val maxAiRequests: Int = DEFAULT_MAX_AI_REQUESTS,
     val maxServerSteps: Int = DEFAULT_MAX_SERVER_STEPS,
     val queryTimeoutSeconds: Int = DEFAULT_QUERY_TIMEOUT_SECONDS,
+    /** Maximum confirmed chunks that can form a writable agent operation. */
+    val maxOperateChunks: Int = DEFAULT_MAX_OPERATE_CHUNKS,
+    /** Maximum chunks that may be sent as read-only building context. */
+    val maxContextChunks: Int = DEFAULT_MAX_CONTEXT_CHUNKS,
     val allowSelfPositionQuery: Boolean = true,
     /** When true, shows the compiled WCL commands before execution. */
     val debugMode: Boolean = false,
 ) {
-    fun normalized(): AgentOperationSettings = copy(
-        maxAiRequests = maxAiRequests.coerceIn(1, MAX_AI_REQUESTS_LIMIT),
-        maxServerSteps = maxServerSteps.coerceIn(0, MAX_SERVER_STEPS_LIMIT),
-        queryTimeoutSeconds = queryTimeoutSeconds.coerceIn(MIN_QUERY_TIMEOUT_SECONDS, MAX_QUERY_TIMEOUT_SECONDS),
-    )
+    fun normalized(): AgentOperationSettings {
+        val boundedOperateChunks = maxOperateChunks.coerceIn(1, MAX_OPERATE_CHUNKS_LIMIT)
+        val boundedContextChunks = maxContextChunks
+            .coerceIn(1, MAX_CONTEXT_CHUNKS_LIMIT)
+            .coerceAtLeast(boundedOperateChunks)
+        return copy(
+            maxAiRequests = maxAiRequests.coerceIn(1, MAX_AI_REQUESTS_LIMIT),
+            maxServerSteps = maxServerSteps.coerceIn(0, MAX_SERVER_STEPS_LIMIT),
+            queryTimeoutSeconds = queryTimeoutSeconds.coerceIn(MIN_QUERY_TIMEOUT_SECONDS, MAX_QUERY_TIMEOUT_SECONDS),
+            maxOperateChunks = boundedOperateChunks,
+            maxContextChunks = boundedContextChunks,
+        )
+    }
 
     fun withFlowEnabled(enabled: Boolean): AgentOperationSettings =
         copy(mode = if (enabled) AgentOperationMode.FLOW else AgentOperationMode.SINGLE)
@@ -207,8 +219,12 @@ data class AgentOperationSettings(
         const val DEFAULT_MAX_AI_REQUESTS = 30
         const val DEFAULT_MAX_SERVER_STEPS = 50
         const val DEFAULT_QUERY_TIMEOUT_SECONDS = 8
+        const val DEFAULT_MAX_OPERATE_CHUNKS = 500
+        const val DEFAULT_MAX_CONTEXT_CHUNKS = 800
         const val MAX_AI_REQUESTS_LIMIT = 30
         const val MAX_SERVER_STEPS_LIMIT = 50
+        const val MAX_OPERATE_CHUNKS_LIMIT = 500
+        const val MAX_CONTEXT_CHUNKS_LIMIT = 800
         const val MIN_QUERY_TIMEOUT_SECONDS = 3
         const val MAX_QUERY_TIMEOUT_SECONDS = 20
     }

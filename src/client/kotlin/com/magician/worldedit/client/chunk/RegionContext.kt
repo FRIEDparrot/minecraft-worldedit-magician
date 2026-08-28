@@ -16,11 +16,15 @@ class OperateRegion(
 
     init {
         require(this.chunks.isNotEmpty()) { "An operate region must contain at least one chunk." }
+        require(this.chunks.size <= ContextRegion.MAX_OPERATE_CHUNKS) {
+            "Operate region cannot exceed ${ContextRegion.MAX_OPERATE_CHUNKS} chunks."
+        }
         require(minY <= maxY) { "Operate region minY must not exceed maxY." }
     }
 
     /** Returns the default read-only context surrounding this operation area. */
-    fun defaultContext(): ContextRegion = ContextRegion.defaultFor(this)
+    fun defaultContext(maxContextChunks: Int = ContextRegion.MAX_CONTEXT_CHUNKS): ContextRegion =
+        ContextRegion.defaultFor(this, maxContextChunks)
 }
 
 /**
@@ -40,7 +44,10 @@ class AgentRegionScope private constructor(
         }
 
         /** Creates the standard one-chunk/five-block read margin for an operation. */
-        fun defaultFor(operate: OperateRegion): AgentRegionScope = create(operate, operate.defaultContext())
+        fun defaultFor(
+            operate: OperateRegion,
+            maxContextChunks: Int = ContextRegion.MAX_CONTEXT_CHUNKS,
+        ): AgentRegionScope = create(operate, operate.defaultContext(maxContextChunks))
     }
 }
 
@@ -80,18 +87,24 @@ class ContextRegion(
         /** Limits caller-supplied margins before the context set is materialized. */
         const val MAX_HORIZONTAL_EXPANSION_CHUNKS = 8
         const val MAX_VERTICAL_EXPANSION_BLOCKS = 64
-        /** A context larger than this needs an explicit, paged observation design. */
-        const val MAX_CONTEXT_CHUNKS = 65_536
+        /** Absolute safe ceiling for writable selection and configurable operate cap. */
+        const val MAX_OPERATE_CHUNKS = 500
+        /** Absolute safe ceiling; the player can configure any lower context cap. */
+        const val MAX_CONTEXT_CHUNKS = 800
 
         /**
          * Expands every operate chunk by one chunk in X/Z and five blocks above
          * and below the Y range. This keeps context bounded by the selected
          * chunks rather than filling an arbitrary distance between sparse chunks.
          */
-        fun defaultFor(operate: OperateRegion): ContextRegion = expandedFor(
+        fun defaultFor(
+            operate: OperateRegion,
+            maxContextChunks: Int = MAX_CONTEXT_CHUNKS,
+        ): ContextRegion = expandedFor(
             operate = operate,
             horizontalExpansionChunks = DEFAULT_HORIZONTAL_EXPANSION_CHUNKS,
             verticalExpansionBlocks = DEFAULT_VERTICAL_EXPANSION_BLOCKS,
+            maxContextChunks = maxContextChunks,
         )
 
         /** Creates a context region with non-negative horizontal and vertical margins. */
@@ -99,6 +112,7 @@ class ContextRegion(
             operate: OperateRegion,
             horizontalExpansionChunks: Int,
             verticalExpansionBlocks: Int,
+            maxContextChunks: Int = MAX_CONTEXT_CHUNKS,
         ): ContextRegion {
             require(horizontalExpansionChunks >= 0) { "Horizontal context expansion cannot be negative." }
             require(verticalExpansionBlocks >= 0) { "Vertical context expansion cannot be negative." }
@@ -108,12 +122,9 @@ class ContextRegion(
             require(verticalExpansionBlocks <= MAX_VERTICAL_EXPANSION_BLOCKS) {
                 "Vertical context expansion cannot exceed $MAX_VERTICAL_EXPANSION_BLOCKS blocks."
             }
-            val width = horizontalExpansionChunks.toLong() * 2L + 1L
-            val maximumChunkCount = saturatingMultiply(operate.chunks.size.toLong(), width, width)
-            require(maximumChunkCount <= MAX_CONTEXT_CHUNKS) {
-                "Context expansion would exceed the $MAX_CONTEXT_CHUNKS chunk limit."
+            require(maxContextChunks in 1..MAX_CONTEXT_CHUNKS) {
+                "Context chunk limit must be between 1 and $MAX_CONTEXT_CHUNKS."
             }
-
             val contextChunks = buildSet {
                 operate.chunks.forEach { chunk ->
                     for (deltaX in -horizontalExpansionChunks..horizontalExpansionChunks) {
@@ -122,6 +133,9 @@ class ContextRegion(
                         }
                     }
                 }
+            }
+            require(contextChunks.size <= maxContextChunks) {
+                "Context expansion would exceed the $maxContextChunks chunk limit."
             }
             return ContextRegion(
                 chunks = contextChunks,

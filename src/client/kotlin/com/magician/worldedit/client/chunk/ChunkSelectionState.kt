@@ -34,6 +34,10 @@ object ChunkSelectionState {
     /** Configuration for the Y-range and block limits. */
     var config: ChunkSelectionConfig = ChunkSelectionConfig()
 
+    /** Runtime-configurable safety limits persisted with agent operation settings. */
+    private var maxOperateChunks: Int = ContextRegion.MAX_OPERATE_CHUNKS
+    private var maxContextChunks: Int = ContextRegion.MAX_CONTEXT_CHUNKS
+
     /** True once the initial clicked block has established the default Y range. */
     var hasConfiguredYRange: Boolean = false
         private set
@@ -45,6 +49,8 @@ object ChunkSelectionState {
         selectionMode = SINGLE
         operationMode = SelectionOperationMode.REPLACE
         config = ChunkSelectionConfig()
+        maxOperateChunks = ContextRegion.MAX_OPERATE_CHUNKS
+        maxContextChunks = ContextRegion.MAX_CONTEXT_CHUNKS
         hasConfiguredYRange = false
     }
 
@@ -84,14 +90,20 @@ object ChunkSelectionState {
      * deliberately excluded.
      */
     fun confirmedOperateRegionOrNull(): OperateRegion? = selectedChunks
-        .takeIf { it.isNotEmpty() }
+        .takeIf { it.isNotEmpty() && it.size <= maxOperateChunks }
         ?.let { OperateRegion(it.toSet(), config.minY, config.maxY) }
 
     /**
      * Returns the validated operate/context pair that future agent tools must
-     * consume. The result is absent until chunks are confirmed.
+     * consume. Oversize operate or context regions become a controlled absence
+     * rather than propagating an exception from region construction.
      */
-    fun agentRegionScopeOrNull(): AgentRegionScope? = confirmedOperateRegionOrNull()?.let(AgentRegionScope::defaultFor)
+    fun agentRegionScopeOrNull(): AgentRegionScope? {
+        if (selectedChunks.isEmpty() || selectedChunks.size > maxOperateChunks) return null
+        return confirmedOperateRegionOrNull()?.let { operate ->
+            runCatching { AgentRegionScope.defaultFor(operate, maxContextChunks) }.getOrNull()
+        }
+    }
 
     /**
      * Returns the default, wider read-only context for the confirmed operation
@@ -136,6 +148,18 @@ object ChunkSelectionState {
     fun updateConfig(newConfig: ChunkSelectionConfig) {
         config = newConfig
         hasConfiguredYRange = true
+    }
+
+    /**
+     * Applies persisted agent-region limits. Context is never allowed below the
+     * writable limit, and both values remain within their hard safety ceilings.
+     */
+    fun configureRegionLimits(maxOperateChunks: Int, maxContextChunks: Int) {
+        val boundedOperate = maxOperateChunks.coerceIn(1, ContextRegion.MAX_OPERATE_CHUNKS)
+        this.maxOperateChunks = boundedOperate
+        this.maxContextChunks = maxContextChunks
+            .coerceIn(1, ContextRegion.MAX_CONTEXT_CHUNKS)
+            .coerceAtLeast(boundedOperate)
     }
 
     /**
