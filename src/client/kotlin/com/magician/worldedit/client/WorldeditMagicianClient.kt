@@ -294,6 +294,7 @@ object WorldeditMagicianClient : ClientModInitializer {
                     literal("chat")
                         .then(literal("init").executes { initChatSession(); Command.SINGLE_SUCCESS })
                         .then(literal("reinit").executes { reinitChatSession(); Command.SINGLE_SUCCESS })
+                        .then(literal("reset").executes { reinitChatSession(); Command.SINGLE_SUCCESS })
                         .then(literal("status").executes { showChatStatus(); Command.SINGLE_SUCCESS })
                         .then(literal("history").executes { showChatHistory(); Command.SINGLE_SUCCESS })
                         .then(literal("screenshot").then(argument("prompt", StringArgumentType.greedyString()).executes { context ->
