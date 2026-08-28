@@ -67,6 +67,8 @@ class WemcConfigPanelScreen(
     private var baseUrlField: EditBox? = null
     private var contextWindowField: EditBox? = null
     private var maxOutputTokensField: EditBox? = null
+    private var operateChunkLimitField: EditBox? = null
+    private var contextChunkLimitField: EditBox? = null
 
 
     private var showSecrets = initialShowSecrets
@@ -94,6 +96,9 @@ class WemcConfigPanelScreen(
         if (from == ConfigTab.AI_MODEL) {
             // Must update the class field so reopen() uses the latest values
             settings = collectAiSettings()
+        }
+        if (from == ConfigTab.AGENT) {
+            opSettings = collectOperationSettings()
         }
         statusMessage = null
         validationMessage = null
@@ -264,6 +269,27 @@ class WemcConfigPanelScreen(
             Button.builder(Component.literal("Max: ${opSettings.maxServerSteps}  [click to change]")) { changeServerLimit() }
                 .bounds(innerLeft, y, innerW, 20).build(), y)
         y += 24; totalH += 24
+
+        // Build region limits
+        addContentLabel("Build Region Limits", y); y += 14; totalH += 14
+        val limitGap = 8
+        val limitWidth = (innerW - limitGap) / 2
+        addContentLabel("Operate chunks (1–500)", innerLeft, y, 0xFF888888.toInt())
+        addContentLabel("Context chunks (operate–800)", innerLeft + limitWidth + limitGap, y, 0xFF888888.toInt())
+        y += 12; totalH += 12
+        operateChunkLimitField = EditBox(font, innerLeft, y, limitWidth, 18, Component.literal("500")).apply {
+            setMaxLength(3)
+            value = opSettings.maxOperateChunks.toString()
+        }
+        contextChunkLimitField = EditBox(font, innerLeft + limitWidth + limitGap, y, limitWidth, 18, Component.literal("800")).apply {
+            setMaxLength(3)
+            value = opSettings.maxContextChunks.toString()
+        }
+        addContentWidget(operateChunkLimitField!!, y)
+        addContentWidget(contextChunkLimitField!!, y)
+        y += 24; totalH += 24
+        addContentLabel("Only confirmed chunks are writable; context is read-only and must cover the operation.", y, 0xFF888888.toInt())
+        y += 20; totalH += 20
 
         // Query Timeout
         addContentLabel("Query Timeout", y); y += 14; totalH += 14
@@ -783,8 +809,18 @@ class WemcConfigPanelScreen(
         }
     }
 
+    private fun collectOperationSettings(): AgentOperationSettings {
+        val operateChunks = operateChunkLimitField?.value?.toIntOrNull() ?: opSettings.maxOperateChunks
+        val contextChunks = contextChunkLimitField?.value?.toIntOrNull() ?: opSettings.maxContextChunks
+        return opSettings.copy(
+            maxOperateChunks = operateChunks,
+            maxContextChunks = contextChunks,
+        ).normalized()
+    }
+
     private fun saveAll() {
         settings = collectAiSettings()
+        opSettings = collectOperationSettings()
         runCatching {
             OpenAiSettingsStore.save(settings)
             AgentOperationSettingsStore.save(opSettings)

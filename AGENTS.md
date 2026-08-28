@@ -1,4 +1,77 @@
-This should be a plugin that full developed by Agent
+# worldedit-magician — Agent-Driven Minecraft World Editing
+
+A Fabric client mod (Kotlin) for Minecraft 1.21.11 that connects the game world to an LLM agent. The long-term goal (see `IDEA.md`): the agent designs and builds structures, tests redstone machines, reads world/entity state, controls tick speed, and verifies its own builds — like a WorldEdit-powered "builder magician" living inside the game.
+
+## Current State
+
+The mod today is an **AI chat client with provider management** — it has **no world interaction yet**:
+
+- Talks to 6 LLM providers (OpenAI, Ollama, Claude, Gemini, DeepSeek, Copilot) over plain HTTP (no SDKs).
+- Persists provider credentials/models to `config/worldedit-magician.json` (keys stored locally, never in URLs).
+- Chat UI: `/wemc msg <prompt>` command, an in-game settings screen, and an `O` keybinding.
+- Tracks an `ApprovalMode` (ASK / APPROVE) setting — the future gate for agent-initiated world writes.
+- Detects whether the WorldEdit mod is installed (status screen + startup check) — only loader-level detection, not API integration.
+
+World interaction (block reads/writes, Litematica, tool-calling agent loop) is the next milestone — see the plan in the repo discussion / next session.
+
+## Tech Stack
+
+| Thing | Value |
+|---|---|
+| Minecraft | 1.21.11 (official Mojang mappings) |
+| Loader | Fabric 0.19.3 |
+| Language | Kotlin 2.4.10 (fabric-language-kotlin), Java 21 target |
+| Fabric API | 0.141.5+1.21.11 |
+| Build | Gradle 9.5.1 + fabric-loom 1.17-SNAPSHOT (`gradlew`) |
+| JSON | Gson (settings/config) + `java.net.http.HttpClient` for AI calls |
+
+## Build & Run
+
+- `gradlew build` — compile + remap.
+- `gradlew runClient` — launches the dev client; dev environment has WorldEdit 7.4.2 + WorldEditCUI preloaded in `run/`.
+- `gradlew runDatagen` — fabric datagen (client-side generator registered).
+- No test source set exists yet.
+
+## Source Layout
+
+```
+src/
+├── main/kotlin/com/magician/worldedit/
+│   └── WorldeditMagician.kt          # ModInitializer entry; MOD_ID + Identifier helper only (no logic yet)
+├── main/resources/
+│   ├── fabric.mod.json               # entrypoints (main/client/datagen), mixins, deps
+│   └── worldedit-magician.mixins.json
+├── client/kotlin/com/magician/worldedit/client/
+│   ├── WorldeditMagicianClient.kt    # Client entry: /wemc command tree, keybinding, screen openers
+│   ├── WorldeditMagicianDataGenerator.kt
+│   ├── config/
+│   │   ├── OpenAiSettingsStore.kt    # OpenAiSettings data class + AiProvider/ApprovalMode enums + JSON persistence
+│   │   ├── AiChatClient.kt           # Async chat call per provider → AiChatResult (Success/Failure)
+│   │   ├── AiModelCatalog.kt         # Async /models listing per provider → AiModel list
+│   │   ├── AiConnectionTester.kt     # Async connection test per provider
+│   │   ├── CopilotProviderSupport.kt # Copilot guidance/fallback behavior
+│   │   ├── WorldEditInstallation.kt  # WorldEdit mod presence + version detection
+│   │   └── OpenAiConnectionTester.kt # Legacy tester (see AiConnectionTester)
+│   └── screen/
+│       ├── OpenAiSettingsScreen.kt           # Main agent/provider settings GUI (269 lines)
+│       ├── WorldEditConfigurationScreen.kt   # WorldEdit install status display
+│       ├── OpenAiConnectionTestScreen.kt     # Connection test UI
+│       └── ConfigurationScreen.kt            # Legacy settings screen
+└── client/resources/                  # lang file, client mixins json
+```
+
+## Key Conventions
+
+- **Commands**: everything hangs off `/wemc` (alias `/worldeditmagician`): `config`, `status`, `provider list|use`, `model list|use`, `msg`, `approval ask|approve`.
+- **Async pattern**: every AI call returns `CompletableFuture<SealedResult>` (Success/Failure); UI/command callbacks re-dispatch to the Minecraft client thread via `Minecraft.getInstance().execute {}`.
+- **Provider dispatch**: exhaustive `when (provider)` over `AiProvider.entries` everywhere — adding an enum value means updating every `when` in the same change (see Mistake Log).
+- **Models are provider-scoped**: each provider keeps its own selected model; switching providers loads that provider's model or an empty selection.
+- **Credentials**: stored locally in `run/config/worldedit-magician.json`; sent only via auth headers, never query strings.
+- **Rendering API**: GUI text colors must be opaque ARGB (`0xFFRRGGBB.toInt()`); plain RGB is fully transparent here.
+
+## Documentation
+
+The important functions, interfaces and core classes that have relatively packaged functions should all be documented (KDoc on public API, doc comments on non-trivial helpers).
 
 ## Mistake Log
 
