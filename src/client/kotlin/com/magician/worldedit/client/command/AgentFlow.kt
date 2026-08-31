@@ -53,8 +53,10 @@ sealed interface FlowParseResult {
 object FlowResponseParser {
     // Matches ```wcl ... ``` — the only AI executable block. Its content is WCL source.
     private val WCL_BLOCK = Regex("""(?s)```wcl\s*\n(.*?)```""", RegexOption.IGNORE_CASE)
-    // Strip AI reasoning/thinking noise from inside the WCL block content
-    private val THINKING_TAG = Regex("""(?s)<(?:icara)?thought[^>]*>.*?</(?:icara)?thought>""")
+    // Strip whole AI reasoning blocks before WCL compilation; leaving their prose behind creates invalid commands.
+    private val THINKING_TAG = Regex(
+        """(?is)<thinking[^>]*>.*?</thinking>|<thought[^>]*>.*?</thought>|<icarathought[^>]*>.*?</icarathought>|<icara_thought[^>]*>.*?</icara_thought>""",
+    )
     private val THINKING_TAG2 = Regex("""(?s)<\/thinking>""")
     private val THINKING_OPEN = Regex("""(?s)<thinking[^>]*>""")
     private val ARROW = Regex("""(?s)^\s*→.*$\s*""")
@@ -89,6 +91,9 @@ object FlowResponseParser {
             }.filter { it.isNotBlank() }.toList()
         } else emptyList()
         val hasWclSources = wclSources.isNotEmpty()
+        if (hasWcl && !hasWclSources) {
+            return FlowParseResult.Invalid("WCL block must contain at least one executable line after removing reasoning text.")
+        }
 
         // Case 1: a plan with a first WCL program waits for the user's approval.
         if (hasPlan && hasWclSources) {
