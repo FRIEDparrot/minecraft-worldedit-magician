@@ -784,7 +784,9 @@ object WorldeditMagicianClient : ClientModInitializer {
                     is WclResult.Ok -> {
                         if (compiled.echoes.isNotEmpty()) compiled.echoes.forEach { sendMessage("[WEMC ECHO] $it") }
                         if (compiled.commands.isEmpty()) {
-                            sendMessage("[WEMC] WCL compiled successfully but produced no Minecraft commands.")
+                            val error = "WCL program produced no Minecraft commands. Include at least one executable command."
+                            sendMessage("[WEMC] $error")
+                            handleFlowAction(flow, flow.controller.onWclCompilationError(error))
                         } else {
                             executeFlowCommands(flow, compiled.commands, action.isEof)
                         }

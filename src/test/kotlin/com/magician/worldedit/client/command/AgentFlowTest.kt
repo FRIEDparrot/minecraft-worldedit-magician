@@ -51,6 +51,23 @@ class AgentFlowTest {
         assertIs<FlowParseResult.WclSource>(result)
     }
 
+    @Test
+    fun `FlowResponseParser rejects a WCL fence emptied by thinking-tag cleanup`() {
+        val response = "```wcl\n<thinking>I need to construct a platform.</thinking>\n```"
+        val result = FlowResponseParser.parse(response)
+
+        val invalid = assertIs<FlowParseResult.Invalid>(result)
+        assertTrue(invalid.message.contains("WCL"))
+    }
+
+    @Test
+    fun `FlowResponseParser preserves the content of a malformed mixed reasoning block`() {
+        val response = "```wcl\n<thinking>do not silently discard this</thought>\nsetblock ~ ~ ~ stone\n```"
+        val result = FlowResponseParser.parse(response)
+
+        val wcl = assertIs<FlowParseResult.WclSource>(result)
+        assertTrue(wcl.wclSource.contains("do not silently discard this"))
+    }
 
     @Test
     fun `FlowResponseParser parses plan-only as AwaitPlanApproval`() {
