@@ -58,8 +58,10 @@ object HostedResponsesRequestFactory {
         history: List<ChatTurn>,
         capabilities: HostedRequestCapabilities,
     ): AiChatRequest {
-        require(capabilities.requiresResponsesApi) { "Hosted Responses request needs a capability." }
         require(supports(settings)) { "${settings.selectedProvider} is not configured for the Responses API." }
+        require(capabilities.requiresResponsesApi || settings.selectedProvider == AiProvider.OPENAI) {
+            "Responses requests without hosted capabilities are only available for official OpenAI."
+        }
 
         val (providerName, baseUrl, apiKey) = when (settings.selectedProvider) {
             AiProvider.OPENAI -> Triple("OpenAI", OpenAiSettingsStore.normalizeBaseUrl(settings.baseUrl), settings.apiKey)

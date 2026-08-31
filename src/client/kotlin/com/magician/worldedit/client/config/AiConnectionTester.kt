@@ -41,11 +41,10 @@ object AiConnectionTester {
         if (settings.openAiSelectedModel.isBlank()) return missing("OpenAI model")
         val body = JsonObject().apply {
             addProperty("model", settings.openAiSelectedModel)
-            addProperty("stream", false)
-            add("messages", messages("Connection test. Reply with OK."))
-            addProperty("max_tokens", 16)
+            addProperty("input", "Connection test. Reply with OK.")
+            addProperty("max_output_tokens", 16)
         }.toString()
-        return send("OpenAI", post("${OpenAiSettingsStore.normalizeBaseUrl(settings.baseUrl)}/chat/completions", body, mapOf("Authorization" to "Bearer ${settings.apiKey.trim()}")))
+        return send("OpenAI", post("${OpenAiSettingsStore.normalizeBaseUrl(settings.baseUrl)}/responses", body, mapOf("Authorization" to "Bearer ${settings.apiKey.trim()}")))
     }
 
     private fun testOllama(settings: OpenAiSettings): CompletableFuture<AiConnectionResult> {

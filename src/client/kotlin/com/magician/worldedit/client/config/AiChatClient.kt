@@ -36,11 +36,13 @@ object AiChatRequestFactory {
         systemPrompt: String? = null,
         history: List<ChatTurn> = emptyList(),
     ): AiChatRequest = when (settings.selectedProvider) {
-        AiProvider.OPENAI -> AiChatRequest(
-            providerName = "OpenAI",
-            url = "${OpenAiSettingsStore.normalizeBaseUrl(settings.baseUrl)}/chat/completions",
-            body = compatibleChatBody(settings.openAiSelectedModel, prompt, settings.maxOutputTokens, settings.reasoningEffort, thinkingMode, systemPrompt, history),
-            headers = mapOf("Authorization" to "Bearer ${settings.apiKey.trim()}"),
+        AiProvider.OPENAI -> HostedResponsesRequestFactory.create(
+            settings = settings,
+            prompt = prompt,
+            thinkingMode = thinkingMode,
+            systemPrompt = systemPrompt,
+            history = history,
+            capabilities = HostedRequestCapabilities(),
         )
         AiProvider.OLLAMA -> AiChatRequest(
             providerName = "Ollama",

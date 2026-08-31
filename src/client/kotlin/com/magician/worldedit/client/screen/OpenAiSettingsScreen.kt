@@ -317,6 +317,6 @@ class OpenAiSettingsScreen(
 		val TEST_LABEL: Component = Component.translatable("screen.worldedit-magician.openai.test")
 		val SAVE_LABEL: Component = Component.translatable("screen.worldedit-magician.openai.save")
 		val CANCEL_LABEL: Component = Component.translatable("gui.cancel")
-		val WIRE_API_LABEL: Component = Component.literal("OpenAI-compatible wire API: chat/completions")
+		val WIRE_API_LABEL: Component = Component.literal("Official OpenAI wire API: Responses")
 	}
 }
