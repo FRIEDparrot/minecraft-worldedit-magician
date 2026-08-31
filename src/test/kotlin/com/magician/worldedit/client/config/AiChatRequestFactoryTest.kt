@@ -86,12 +86,12 @@ class AiChatRequestFactoryTest {
     }
 
     @Test
-    fun `OpenAI uses the configured compatible chat completions protocol`() {
+    fun `official OpenAI uses the Responses API for ordinary chat`() {
         val request = AiChatRequestFactory.create(
             OpenAiSettings(
                 selectedProvider = AiProvider.OPENAI,
                 apiKey = "openai-key",
-                baseUrl = "https://gateway.example/responses/v1",
+                baseUrl = "https://api.openai.com/v1",
                 openAiSelectedModel = "gpt-test",
                 maxOutputTokens = 321,
             ),
@@ -100,15 +100,16 @@ class AiChatRequestFactoryTest {
         val body = JsonParser.parseString(request.body).asJsonObject
 
         assertEquals("OpenAI", request.providerName)
-        assertEquals("https://gateway.example/responses/v1/chat/completions", request.url)
+        assertEquals("https://api.openai.com/v1/responses", request.url)
         assertEquals("Bearer openai-key", request.headers["Authorization"])
+        assertTrue(request.responsesApi)
         assertEquals("gpt-test", body.get("model").asString)
-        assertEquals(321, body.get("max_tokens").asInt)
-        assertEquals(false, body.get("stream").asBoolean)
-        assertEquals("user", body.getAsJsonArray("messages")[0].asJsonObject.get("role").asString)
-        assertEquals("Build a tower", body.getAsJsonArray("messages")[0].asJsonObject.get("content").asString)
-        assertFalse(body.has("input"))
-        assertFalse(body.has("max_output_tokens"))
+        assertEquals(321, body.get("max_output_tokens").asInt)
+        assertEquals("user", body.getAsJsonArray("input")[0].asJsonObject.get("role").asString)
+        assertEquals("Build a tower", body.getAsJsonArray("input")[0].asJsonObject
+            .getAsJsonArray("content")[0].asJsonObject.get("text").asString)
+        assertFalse(body.has("messages"))
+        assertFalse(body.has("max_tokens"))
     }
 
     @Test

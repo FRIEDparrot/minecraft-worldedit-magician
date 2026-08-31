@@ -240,6 +240,8 @@ Provider and model commands are also available in chat:
 
 Each provider keeps a separate selected-model setting. Configuration is saved in Fabric's config directory as `worldedit-magician.json`; it can contain API keys/access tokens in plaintext, so protect that file accordingly. Command-category permissions are saved separately in `worldedit-magician-command-permissions.json`.
 
+The built-in `openai` provider sends ordinary chat through OpenAI's `/responses` endpoint and requires an API project key. It does not use a ChatGPT website session or subscription as an API credential.
+
 ## Command reference
 
 | Command | Purpose |

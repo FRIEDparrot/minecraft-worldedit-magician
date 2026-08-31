@@ -379,7 +379,7 @@ Persistence file: `<config>/worldedit-magician-command-permissions.json`.
 
 | Provider id | Base URL | Auth | Notes |
 |---|---|---|---|
-| `openai` | `https://api.openai.com/v1` | Bearer `apiKey` | Reasoning effort honored |
+| `openai` | `https://api.openai.com/v1` | Bearer `apiKey` | Official `/responses` API; reasoning effort honored |
 | `ollama` | `http://127.0.0.1:<port>` | none | Default port `11434`; `/api/chat` |
 | `claude` | `https://api.anthropic.com/v1` | `x-api-key` header + `anthropic-version` | |
 | `gemini` | `https://generativelanguage.googleapis.com/v1beta` | `x-goog-api-key` header | Model in URL path |
@@ -395,6 +395,8 @@ Persistence file: `<config>/worldedit-magician-command-permissions.json`.
 | `copilot` | GitHub device-token endpoint | Access token | Token-based, see `CopilotProviderSupport` |
 
 > API keys are sent in headers, **never** in URL query strings.
+
+The OpenAI provider needs an OpenAI **API project key**. A ChatGPT website sign-in or subscription is not stored or used as a credential by WEMC.
 
 Each provider has its own dedicated settings slot (e.g. `claudeApiKey`, `ollamaBaseUrl`, `ollamaPort`) so credentials never leak across providers.
 

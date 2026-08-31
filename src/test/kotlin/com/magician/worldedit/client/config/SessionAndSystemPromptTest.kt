@@ -11,7 +11,7 @@ import kotlin.test.assertTrue
  * Verifies the new chat-session plumbing:
  *   - WemcSystemPrompt is stable across calls (so OpenAI's prompt cache can hit)
  *   - WemcSessionManager rolls history at MAX_TURNS and aggregates token counts
- *   - AiChatRequestFactory emits the right message layout when system prompt
+ *   - AiChatRequestFactory emits the right Responses input layout when system prompt
  *     and history are supplied
  *   - The compact player-state placeholder stays within a small token budget
  */
@@ -87,7 +87,7 @@ class SessionAndSystemPromptTest {
     }
 
     @Test
-    fun `message layout includes system anchor then history then current user`() {
+    fun `Responses input includes developer anchor then history then current user`() {
         val request = AiChatRequestFactory.create(
             settings = OpenAiSettings(openAiSelectedModel = "gpt-test"),
             prompt = "current user request",
@@ -98,32 +98,33 @@ class SessionAndSystemPromptTest {
             ),
         )
         val parsed = JsonParser.parseString(request.body).asJsonObject
-        val messages = parsed.getAsJsonArray("messages")
-        assertEquals(6, messages.size(), "system + 2 history pairs (4) + current user = 6")
-        assertEquals("system", messages[0].asJsonObject.get("role").asString)
-        assertEquals("[anchor] static whitelist", messages[0].asJsonObject.get("content").asString)
-        assertEquals("user", messages[1].asJsonObject.get("role").asString)
-        assertEquals("first ask", messages[1].asJsonObject.get("content").asString)
-        assertEquals("assistant", messages[2].asJsonObject.get("role").asString)
-        assertEquals("first answer", messages[2].asJsonObject.get("content").asString)
-        assertEquals("user", messages[3].asJsonObject.get("role").asString)
-        assertEquals("follow up", messages[3].asJsonObject.get("content").asString)
-        assertEquals("assistant", messages[4].asJsonObject.get("role").asString)
-        assertEquals("follow answer", messages[4].asJsonObject.get("content").asString)
-        assertEquals("user", messages[5].asJsonObject.get("role").asString)
-        assertEquals("current user request", messages[5].asJsonObject.get("content").asString)
+        val input = parsed.getAsJsonArray("input")
+        assertEquals(6, input.size(), "developer + 2 history pairs (4) + current user = 6")
+        assertEquals("developer", input[0].asJsonObject.get("role").asString)
+        assertEquals("[anchor] static whitelist", input[0].asJsonObject.get("content").asString)
+        assertEquals("user", input[1].asJsonObject.get("role").asString)
+        assertEquals("first ask", input[1].asJsonObject.get("content").asString)
+        assertEquals("assistant", input[2].asJsonObject.get("role").asString)
+        assertEquals("first answer", input[2].asJsonObject.get("content").asString)
+        assertEquals("user", input[3].asJsonObject.get("role").asString)
+        assertEquals("follow up", input[3].asJsonObject.get("content").asString)
+        assertEquals("assistant", input[4].asJsonObject.get("role").asString)
+        assertEquals("follow answer", input[4].asJsonObject.get("content").asString)
+        assertEquals("user", input[5].asJsonObject.get("role").asString)
+        assertEquals("current user request", input[5].asJsonObject.getAsJsonArray("content")[0]
+            .asJsonObject.get("text").asString)
     }
 
     @Test
-    fun `message layout omits system anchor when not provided`() {
+    fun `Responses input omits developer anchor when not provided`() {
         val request = AiChatRequestFactory.create(
             settings = OpenAiSettings(openAiSelectedModel = "gpt-test"),
             prompt = "hello",
         )
         val parsed = JsonParser.parseString(request.body).asJsonObject
-        val messages = parsed.getAsJsonArray("messages")
-        assertEquals(1, messages.size())
-        assertEquals("user", messages[0].asJsonObject.get("role").asString)
+        val input = parsed.getAsJsonArray("input")
+        assertEquals(1, input.size())
+        assertEquals("user", input[0].asJsonObject.get("role").asString)
     }
 
     @Test
@@ -162,15 +163,15 @@ class SessionAndSystemPromptTest {
         val first = AiChatRequestFactory.create(settings, "msg-1", systemPrompt = cachedPrompt).body
         val second = AiChatRequestFactory.create(settings, "msg-2", systemPrompt = cachedPrompt).body
         val firstUser = JsonParser.parseString(first).asJsonObject
-            .getAsJsonArray("messages").last().asJsonObject.get("content").asString
+            .getAsJsonArray("input").last().asJsonObject.getAsJsonArray("content")[0].asJsonObject.get("text").asString
         val secondUser = JsonParser.parseString(second).asJsonObject
-            .getAsJsonArray("messages").last().asJsonObject.get("content").asString
+            .getAsJsonArray("input").last().asJsonObject.getAsJsonArray("content")[0].asJsonObject.get("text").asString
         assertEquals("msg-1", firstUser)
         assertEquals("msg-2", secondUser)
         val firstSystem = JsonParser.parseString(first).asJsonObject
-            .getAsJsonArray("messages").first().asJsonObject.get("content").asString
+            .getAsJsonArray("input").first().asJsonObject.get("content").asString
         val secondSystem = JsonParser.parseString(second).asJsonObject
-            .getAsJsonArray("messages").first().asJsonObject.get("content").asString
+            .getAsJsonArray("input").first().asJsonObject.get("content").asString
         assertEquals(firstSystem, secondSystem)
     }
 
