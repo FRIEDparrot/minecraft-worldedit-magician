@@ -1,6 +1,8 @@
 package com.magician.worldedit.client.config
 
+import com.magician.worldedit.client.chunk.AgentRegionScopePrompt
 import com.magician.worldedit.client.chunk.ChunkPos
+import com.magician.worldedit.client.chunk.ChunkSelectionState
 import net.minecraft.client.Minecraft
 
 /**
@@ -35,8 +37,7 @@ object PlayerStateShortEncoder {
      * client player. Falls back to [PLACEHOLDER] when not in a world.
      */
     fun encodeCurrent(): String {
-        val minecraft = Minecraft.getInstance()
-        val player = minecraft.player ?: return PLACEHOLDER
+        val player = runCatching { Minecraft.getInstance().player }.getOrNull() ?: return PLACEHOLDER
         val pos = player.blockPosition()
         val chunk = ChunkPos(pos.x shr 4, pos.z shr 4)
         val dim = dimensionAbbrev(player)
@@ -69,8 +70,10 @@ object PlayerStateShortEncoder {
     /**
      * Combines the encoded state with the player's request into one user-role message.
      */
-    fun wrapPlayerRequest(playerRequest: String): String =
-        encodeCurrent() + " | " + playerRequest.trim()
+    fun wrapPlayerRequest(playerRequest: String): String {
+        val playerMessage = encodeCurrent() + " | " + playerRequest.trim()
+        return AgentRegionScopePrompt.appendTo(playerMessage, ChunkSelectionState.agentRegionScopeOrNull())
+    }
 
     /**
      * Inspect the dimension via the well-known LevelReader key. We pull the
