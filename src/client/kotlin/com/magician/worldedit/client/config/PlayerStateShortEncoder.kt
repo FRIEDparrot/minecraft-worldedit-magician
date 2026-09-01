@@ -9,13 +9,16 @@ import net.minecraft.client.Minecraft
  * Encodes the player state into a compact token-saving line that is
  * prepended to every `/wemc chat` user message.
  *
- * Format (fixed): `@s <x>,<y>,<z>|<dim>(<cx>,<cz>)|face=<dir>,yaw=<yaw>,pitch=<pitch> | <player request>`
+ * Base format: `@s <x>,<y>,<z>|<dim>(<cx>,<cz>)|face=<dir>,yaw=<yaw>,pitch=<pitch> | <player request>`
  *
  * Example: `@s 0,64,0|over(0,0)|face=S(+Z),level,yaw=0,pitch=0 | build a 5x5 stone platform`
  *
- * Total cost is roughly 25-35 tokens versus the ~100 token long
- * description produced by
+ * When a confirmed selection exists, [wrapPlayerRequest] appends an optional
+ * multi-line `WEMC REGION SCOPE` envelope containing the writable and
+ * read-only chunk coordinates and Y ranges. The base state line costs roughly
+ * 25-35 tokens versus the ~100 token long description produced by
  * [com.magician.worldedit.client.command.PlayerStateContext].
+ * Scope metadata adds a variable cost based on the number of listed chunks.
  *
  * The encoder intentionally avoids Player/Level reflection APIs that
  * changed across Minecraft versions; only the small set of fields that
@@ -67,9 +70,7 @@ object PlayerStateShortEncoder {
         return "$horizontal,$vertical"
     }
 
-    /**
-     * Combines the encoded state with the player's request into one user-role message.
-     */
+    /** Combines the encoded state and optional region scope with the request. */
     fun wrapPlayerRequest(playerRequest: String): String {
         val playerMessage = encodeCurrent() + " | " + playerRequest.trim()
         return AgentRegionScopePrompt.appendTo(playerMessage, ChunkSelectionState.agentRegionScopeOrNull())
