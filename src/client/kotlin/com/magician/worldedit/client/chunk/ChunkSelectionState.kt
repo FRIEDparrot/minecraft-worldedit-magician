@@ -95,14 +95,20 @@ object ChunkSelectionState {
 
     /**
      * Returns the validated operate/context pair that future agent tools must
-     * consume. Oversize operate or context regions become a controlled absence
-     * rather than propagating an exception from region construction.
+     * consume. An oversize operate region is a controlled absence, while a
+     * context expansion that exceeds its cap falls back to an operate-only
+     * context so the writable boundary is never silently dropped.
      */
     fun agentRegionScopeOrNull(): AgentRegionScope? {
         if (selectedChunks.isEmpty() || selectedChunks.size > maxOperateChunks) return null
-        return confirmedOperateRegionOrNull()?.let { operate ->
-            runCatching { AgentRegionScope.defaultFor(operate, maxContextChunks) }.getOrNull()
-        }
+        val operate = confirmedOperateRegionOrNull() ?: return null
+        return runCatching { AgentRegionScope.defaultFor(operate, maxContextChunks) }
+            .getOrElse {
+                AgentRegionScope.create(
+                    operate,
+                    ContextRegion(operate.chunks, operate.minY, operate.maxY),
+                )
+            }
     }
 
     /**

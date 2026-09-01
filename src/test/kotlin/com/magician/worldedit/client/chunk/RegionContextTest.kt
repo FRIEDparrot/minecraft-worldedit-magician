@@ -119,12 +119,16 @@ class RegionContextTest {
     }
 
     @Test
-    fun `context cap returns controlled absence when default neighborhood is too large`() {
+    fun `context cap falls back to an operate-only context when neighborhood is too large`() {
         ChunkSelectionState.configureRegionLimits(maxOperateChunks = 1, maxContextChunks = 8)
         ChunkSelectionState.selectedChunks.add(ChunkPos(0, 0))
 
         assertTrue(ChunkSelectionState.confirmedOperateRegionOrNull() != null)
-        assertNull(ChunkSelectionState.agentRegionScopeOrNull())
+        val scope = requireNotNull(ChunkSelectionState.agentRegionScopeOrNull())
+        assertEquals(setOf(ChunkPos(0, 0)), scope.operate.chunks)
+        assertEquals(scope.operate.chunks, scope.context.chunks)
+        assertEquals(scope.operate.minY, scope.context.minY)
+        assertEquals(scope.operate.maxY, scope.context.maxY)
     }
 
     @Test
