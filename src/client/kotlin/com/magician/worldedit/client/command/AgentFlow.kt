@@ -301,12 +301,8 @@ class AgentFlowController(private val settings: AgentOperationSettings) {
     private var quietDeadlineMillis: Long? = null
     private var displayText = ""
 
-    /** Returns the timeout multiplier for the current step based on thinking mode. */
-    private fun thinkingMultiplier(): Int = when (norm.extendedThinking) {
-        ExtendedThinkingMode.OFF -> 1
-        ExtendedThinkingMode.FIRST_STEP_ONLY -> if (currentStep <= 1) 2 else 1
-        ExtendedThinkingMode.ON -> 2
-    }
+    /** Returns the timeout multiplier for the request that produced the current command batch. */
+    private fun thinkingMultiplier(): Int = if (thinkingModeForStep() == ExtendedThinkingMode.OFF) 1 else 2
 
     fun start(): AgentFlowAction {
         if (norm.mode != AgentOperationMode.FLOW) return AgentFlowAction.Failed("Flow mode is disabled.")
@@ -461,8 +457,16 @@ class AgentFlowController(private val settings: AgentOperationSettings) {
 
     fun currentStepNumber(): Int = currentStep
 
-    /** Returns the thinking mode to use for the current step. FIRST_STEP_ONLY means ON only on step 1. */
-    fun thinkingModeForStep(): ExtendedThinkingMode = norm.extendedThinking
+    /**
+     * Returns the thinking mode for the request currently in flight.
+     *
+     * FIRST_STEP_ONLY applies to exactly the initial agent request. Every request
+     * reserved for approval, continuation, or WCL repair is sent without it.
+     */
+    fun thinkingModeForStep(): ExtendedThinkingMode = when (norm.extendedThinking) {
+        ExtendedThinkingMode.FIRST_STEP_ONLY -> if (aiRequestCount == 1) ExtendedThinkingMode.FIRST_STEP_ONLY else ExtendedThinkingMode.OFF
+        else -> norm.extendedThinking
+    }
 
     private fun buildServerContext(): String = buildString {
         appendLine("=== completed step $currentStep ===")
