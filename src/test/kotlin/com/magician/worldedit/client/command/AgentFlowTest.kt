@@ -227,6 +227,24 @@ reason: Need to clear area first
     }
 
     @Test
+    fun `approved plan rejects commands beyond its declared step count`() {
+        val controller = AgentFlowController(AgentOperationSettings())
+        controller.start()
+        controller.onAgentResponse("```wemc-plan\nsteps: 1\nreason: one operation\n```")
+        controller.approvePlan(0)
+
+        assertIs<AgentFlowAction.WclReady>(controller.onAgentResponse("```wcl\nsetblock ~ ~ ~ stone\n```"))
+        controller.markStepDispatched(0)
+        controller.onServerGameMessage("Block placed.", 1)
+        assertIs<AgentFlowAction.RequestContinuation>(controller.completeStepIfReady(501))
+
+        val action = controller.onAgentResponse("```wcl\nsetblock ~1 ~ ~ stone\n```")
+
+        val failure = assertIs<AgentFlowAction.Failed>(action)
+        assertTrue(failure.message.contains("Plan step limit reached"))
+    }
+
+    @Test
     fun `rejectPlan returns FlowEnded`() {
         val controller = AgentFlowController(AgentOperationSettings())
         controller.start()

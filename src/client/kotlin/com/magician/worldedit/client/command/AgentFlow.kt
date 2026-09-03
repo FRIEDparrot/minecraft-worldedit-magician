@@ -329,7 +329,9 @@ class AgentFlowController(private val settings: AgentOperationSettings) {
         return when (val result = FlowResponseParser.parse(answer)) {
             is FlowParseResult.Invalid -> AgentFlowAction.Failed("Flow parse error: ${result.message}")
 
-            is FlowParseResult.WclSource -> {
+            is FlowParseResult.WclSource -> if (planApproved && currentStep >= totalSteps) {
+                fail("Plan step limit reached ($totalSteps). The approved plan has no remaining steps.")
+            } else {
                 if (aiRequestCount > norm.maxAiRequests) {
                     AgentFlowAction.Failed("AI request limit reached (${norm.maxAiRequests}).")
                 } else {
