@@ -418,14 +418,13 @@ class AgentFlowController(private val settings: AgentOperationSettings) {
         val deadline = queryDeadlineMillis ?: return AgentFlowAction.Noop
         val quietDeadline = quietDeadlineMillis ?: deadline
 
-        // If we have no server responses yet, check timeout
-        if (pendingResponse.isEmpty()) {
-            if (nowMillis < deadline) return AgentFlowAction.Noop
-            return fail("Step $currentStep timed out without a server response.")
-        }
+        // If no game message arrives by the deadline, continue with an explicit
+        // observation instead of treating absent command feedback as a fatal error.
+        if (pendingResponse.isEmpty() && nowMillis < deadline) return AgentFlowAction.Noop
 
-        // Wait for quiet period (let responses settle)
-        if (nowMillis < quietDeadline) return AgentFlowAction.Noop
+        // Wait for received responses to settle. A quiet timeout has no effect when
+        // the server sent no messages, because the query deadline is the boundary.
+        if (pendingResponse.isNotEmpty() && nowMillis < quietDeadline) return AgentFlowAction.Noop
 
         // Check step limit
         if (serverStepCount >= norm.maxServerSteps) {
@@ -463,8 +462,15 @@ class AgentFlowController(private val settings: AgentOperationSettings) {
 
     fun currentStepNumber(): Int = currentStep
 
-    /** Returns the thinking mode to use for the current step. FIRST_STEP_ONLY means ON only on step 1. */
-    fun thinkingModeForStep(): ExtendedThinkingMode = norm.extendedThinking
+    /**
+     * Returns the thinking mode for the request about to be sent.
+     * FIRST_STEP_ONLY applies only to the initial provider request; plan approval,
+     * command continuations, and WCL repair requests are subsequent requests.
+     */
+    fun thinkingModeForStep(): ExtendedThinkingMode = when (norm.extendedThinking) {
+        ExtendedThinkingMode.FIRST_STEP_ONLY -> if (aiRequestCount == 1) ExtendedThinkingMode.FIRST_STEP_ONLY else ExtendedThinkingMode.OFF
+        else -> norm.extendedThinking
+    }
 
     private fun buildServerContext(): String = buildString {
         appendLine("=== completed step $currentStep ===")

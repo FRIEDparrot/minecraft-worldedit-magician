@@ -261,6 +261,52 @@ reason: Need to clear area first
         assertIs<AgentFlowAction.FlowEnded>(action)
     }
 
+    @Test
+    fun `a quiet server response deadline continues the flow with explicit no-response context`() {
+        val controller = AgentFlowController(AgentOperationSettings(queryTimeoutSeconds = 3))
+        controller.start()
+        assertIs<AgentFlowAction.WclReady>(controller.onAgentResponse("```wcl\nsetblock ~ ~ ~ minecraft:stone\n```"))
+        controller.markStepDispatched(0)
+
+        val action = controller.completeStepIfReady(3_000)
+
+        val continuation = assertIs<AgentFlowAction.RequestContinuation>(action)
+        assertTrue(continuation.context.contains("no game message observed"))
+    }
+
+    @Test
+    fun `first-step thinking is disabled for a command continuation`() {
+        val controller = AgentFlowController(AgentOperationSettings(extendedThinking = ExtendedThinkingMode.FIRST_STEP_ONLY))
+        controller.start()
+        assertEquals(ExtendedThinkingMode.FIRST_STEP_ONLY, controller.thinkingModeForStep())
+        assertIs<AgentFlowAction.WclReady>(controller.onAgentResponse("```wcl\nsetblock ~ ~ ~ minecraft:stone\n```"))
+        controller.markStepDispatched(0)
+        controller.onServerGameMessage("Block placed.", 1)
+        assertIs<AgentFlowAction.RequestContinuation>(controller.completeStepIfReady(501))
+
+        assertEquals(ExtendedThinkingMode.OFF, controller.thinkingModeForStep())
+    }
+
+    @Test
+    fun `first-step thinking is disabled after a plan approval request`() {
+        val controller = AgentFlowController(AgentOperationSettings(extendedThinking = ExtendedThinkingMode.FIRST_STEP_ONLY))
+        controller.start()
+        assertIs<AgentFlowAction.AwaitPlanApproval>(controller.onAgentResponse("```wemc-plan\nsteps: 2\nreason: test\n```"))
+        assertIs<AgentFlowAction.PlanApprovedPrompt>(controller.approvePlan(0))
+
+        assertEquals(ExtendedThinkingMode.OFF, controller.thinkingModeForStep())
+    }
+
+    @Test
+    fun `first-step thinking is disabled after a WCL repair request`() {
+        val controller = AgentFlowController(AgentOperationSettings(extendedThinking = ExtendedThinkingMode.FIRST_STEP_ONLY))
+        controller.start()
+        assertIs<AgentFlowAction.WclReady>(controller.onAgentResponse("```wcl\nnot valid wcl\n```"))
+        assertIs<AgentFlowAction.WclCompilationFailed>(controller.onWclCompilationError("invalid command"))
+
+        assertEquals(ExtendedThinkingMode.OFF, controller.thinkingModeForStep())
+    }
+
     // Note: AI request limit is checked only in AWAITING_AGENT state.
     // Testing it requires simulating EXECUTING→AWAITING_AGENT transitions via
     // completeStepIfReady() with server responses or timeouts — not practical in unit tests.
