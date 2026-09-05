@@ -305,7 +305,7 @@ class AgentFlowController(private val settings: AgentOperationSettings) {
     private fun thinkingMultiplier(): Int = if (thinkingModeForStep() == ExtendedThinkingMode.OFF) 1 else 2
 
     fun start(): AgentFlowAction {
-        if (norm.mode != AgentOperationMode.FLOW) return AgentFlowAction.Failed("Flow mode is disabled.")
+        if (norm.mode != AgentOperationMode.FLOW) return fail("Flow mode is disabled.")
         state = FlowState.AWAITING_AGENT
         aiRequestCount = 1
         currentStep = 0
@@ -323,16 +323,16 @@ class AgentFlowController(private val settings: AgentOperationSettings) {
         displayText = answer.trim()
 
         return when (val result = FlowResponseParser.parse(answer)) {
-            is FlowParseResult.Invalid -> AgentFlowAction.Failed("Flow parse error: ${result.message}")
+            is FlowParseResult.Invalid -> fail("Flow parse error: ${result.message}")
 
-            is FlowParseResult.WclSource -> {
-                if (aiRequestCount > norm.maxAiRequests) {
-                    AgentFlowAction.Failed("AI request limit reached (${norm.maxAiRequests}).")
-                } else {
-                    currentStep++
-                    state = if (result.isEof) FlowState.COMPLETED else FlowState.EXECUTING
-                    AgentFlowAction.WclReady(result.wclSource, result.displayText, result.isEof)
-                }
+            is FlowParseResult.WclSource -> if (planApproved && currentStep >= totalSteps) {
+                fail("Plan step limit reached ($totalSteps). The approved plan has no remaining steps.")
+            } else if (aiRequestCount > norm.maxAiRequests) {
+                fail("AI request limit reached (${norm.maxAiRequests}).")
+            } else {
+                currentStep++
+                state = if (result.isEof) FlowState.COMPLETED else FlowState.EXECUTING
+                AgentFlowAction.WclReady(result.wclSource, result.displayText, result.isEof)
             }
 
             is FlowParseResult.PlanOnly -> {
@@ -412,14 +412,13 @@ class AgentFlowController(private val settings: AgentOperationSettings) {
         val deadline = queryDeadlineMillis ?: return AgentFlowAction.Noop
         val quietDeadline = quietDeadlineMillis ?: deadline
 
-        // If we have no server responses yet, check timeout
-        if (pendingResponse.isEmpty()) {
-            if (nowMillis < deadline) return AgentFlowAction.Noop
-            return fail("Step $currentStep timed out without a server response.")
-        }
+        // If no game message arrives by the deadline, continue with an explicit
+        // observation instead of treating absent command feedback as a fatal error.
+        if (pendingResponse.isEmpty() && nowMillis < deadline) return AgentFlowAction.Noop
 
-        // Wait for quiet period (let responses settle)
-        if (nowMillis < quietDeadline) return AgentFlowAction.Noop
+        // Wait for received responses to settle. A quiet timeout has no effect when
+        // the server sent no messages, because the query deadline is the boundary.
+        if (pendingResponse.isNotEmpty() && nowMillis < quietDeadline) return AgentFlowAction.Noop
 
         // Check step limit
         if (serverStepCount >= norm.maxServerSteps) {
@@ -458,10 +457,9 @@ class AgentFlowController(private val settings: AgentOperationSettings) {
     fun currentStepNumber(): Int = currentStep
 
     /**
-     * Returns the thinking mode for the request currently in flight.
-     *
-     * FIRST_STEP_ONLY applies to exactly the initial agent request. Every request
-     * reserved for approval, continuation, or WCL repair is sent without it.
+     * Returns the thinking mode for the request about to be sent.
+     * FIRST_STEP_ONLY applies only to the initial provider request; plan approval,
+     * command continuations, and WCL repair requests are subsequent requests.
      */
     fun thinkingModeForStep(): ExtendedThinkingMode = when (norm.extendedThinking) {
         ExtendedThinkingMode.FIRST_STEP_ONLY -> if (aiRequestCount == 1) ExtendedThinkingMode.FIRST_STEP_ONLY else ExtendedThinkingMode.OFF
