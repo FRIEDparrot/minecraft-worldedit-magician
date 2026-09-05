@@ -301,15 +301,11 @@ class AgentFlowController(private val settings: AgentOperationSettings) {
     private var quietDeadlineMillis: Long? = null
     private var displayText = ""
 
-    /** Returns the timeout multiplier for the current step based on thinking mode. */
-    private fun thinkingMultiplier(): Int = when (norm.extendedThinking) {
-        ExtendedThinkingMode.OFF -> 1
-        ExtendedThinkingMode.FIRST_STEP_ONLY -> if (currentStep <= 1) 2 else 1
-        ExtendedThinkingMode.ON -> 2
-    }
+    /** Returns the timeout multiplier for the request that produced the current command batch. */
+    private fun thinkingMultiplier(): Int = if (thinkingModeForStep() == ExtendedThinkingMode.OFF) 1 else 2
 
     fun start(): AgentFlowAction {
-        if (norm.mode != AgentOperationMode.FLOW) return AgentFlowAction.Failed("Flow mode is disabled.")
+        if (norm.mode != AgentOperationMode.FLOW) return fail("Flow mode is disabled.")
         state = FlowState.AWAITING_AGENT
         aiRequestCount = 1
         currentStep = 0
@@ -327,18 +323,16 @@ class AgentFlowController(private val settings: AgentOperationSettings) {
         displayText = answer.trim()
 
         return when (val result = FlowResponseParser.parse(answer)) {
-            is FlowParseResult.Invalid -> AgentFlowAction.Failed("Flow parse error: ${result.message}")
+            is FlowParseResult.Invalid -> fail("Flow parse error: ${result.message}")
 
             is FlowParseResult.WclSource -> if (planApproved && currentStep >= totalSteps) {
                 fail("Plan step limit reached ($totalSteps). The approved plan has no remaining steps.")
+            } else if (aiRequestCount > norm.maxAiRequests) {
+                fail("AI request limit reached (${norm.maxAiRequests}).")
             } else {
-                if (aiRequestCount > norm.maxAiRequests) {
-                    AgentFlowAction.Failed("AI request limit reached (${norm.maxAiRequests}).")
-                } else {
-                    currentStep++
-                    state = if (result.isEof) FlowState.COMPLETED else FlowState.EXECUTING
-                    AgentFlowAction.WclReady(result.wclSource, result.displayText, result.isEof)
-                }
+                currentStep++
+                state = if (result.isEof) FlowState.COMPLETED else FlowState.EXECUTING
+                AgentFlowAction.WclReady(result.wclSource, result.displayText, result.isEof)
             }
 
             is FlowParseResult.PlanOnly -> {

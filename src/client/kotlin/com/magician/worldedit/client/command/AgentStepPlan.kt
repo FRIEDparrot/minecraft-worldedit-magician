@@ -48,6 +48,14 @@ object AgentStepPlanParser {
 
 /** Mode-specific instructions supplied to the model before every user request. */
 object AgentStepPlanningPrompt {
+    /** Wraps a FLOW request with the protocol instructions required by the controller. */
+    fun flowRequest(prompt: String): String = buildString {
+        appendLine(instructions(AgentOperationMode.FLOW))
+        appendLine()
+        appendLine("Player request and current FLOW context:")
+        appendLine(prompt)
+    }.trim()
+
     fun instructions(mode: AgentOperationMode): String = buildString {
         if (mode == AgentOperationMode.SINGLE) {
             appendLine("WEMC is in SINGLE mode. Respond with exactly one ```wcl block containing one multi-line WCL program.")
@@ -90,6 +98,8 @@ object AgentStepPlanningPrompt {
         } else {
             appendLine("WEMC is in FLOW mode. All commands are expressed as WCL (WEMC Command Language) code.")
             appendLine("WCL is compiled and auto-executed without per-step approval.")
+            appendLine("For a request that fits in one command batch, do not emit wemc-plan or wait for approval: return one WCL block with <eof>.")
+            appendLine("Use wemc-plan only when the task needs multiple server-observed steps; that plan path is the only FLOW path that pauses for approval.")
             appendLine()
             appendLine("Command production rules (IMPORTANT):")
             appendLine("- Produce as few commands as possible. Prefer fill/volume over many setblock calls.")

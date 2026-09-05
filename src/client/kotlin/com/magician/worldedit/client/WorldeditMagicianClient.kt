@@ -14,6 +14,7 @@ import com.magician.worldedit.client.command.AgentOperationMode
 import com.magician.worldedit.client.command.ExtendedThinkingMode
 import com.magician.worldedit.client.command.AgentOperationSettings
 import com.magician.worldedit.client.command.AgentOperationSettingsStore
+import com.magician.worldedit.client.command.AgentStepPlanningPrompt
 
 
 import com.magician.worldedit.client.command.AgentResponsePresentation
@@ -676,10 +677,11 @@ object WorldeditMagicianClient : ClientModInitializer {
 
     private fun sendFlowRequest(flow: ActiveFlow, prompt: String) {
         val thinkingMode = flow.controller.thinkingModeForStep()
+        val flowPrompt = AgentStepPlanningPrompt.flowRequest(prompt)
         sendMessage("[WEMC] Sending flow request to ${providerId(flow.settings.selectedProvider)}...")
         AiChatClient.send(
             flow.settings,
-            prompt,
+            flowPrompt,
             AgentOperationMode.FLOW,
             thinkingMode,
             capabilities = HostedRequestCapabilities(webSearchEnabled = flow.settings.hostedWebSearchEnabled),

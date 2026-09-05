@@ -95,6 +95,9 @@ The important functions, interfaces and core classes that have relatively packag
 - In Minecraft 1.21.11, `LevelRenderer.collectPerFrameGizmos()` installs the per-frame collector by calling `Gizmos.withCollector()` before returning. Emit custom gizmos from a `RETURN` injection while that temporary collection is still open; a `HEAD` injection runs before collector installation and crashes as soon as any gizmo is submitted.
 - World-changing commands must be sent through the active server connection after whitelist validation; do not mutate client `Level` state through reflection, and never claim a server command is reversible without a server-side rollback mechanism.
 - Before adding, changing, or documenting any vanilla Minecraft command for WEMC, look up its current Java Edition syntax on the Minecraft Wiki (`minecraft.wiki`) first. Do not invent command roots or incomplete forms: `/entity query` is not a vanilla command, `/time query` requires a concrete query argument (for example `daytime` or `gametime`), and entity NBT lookup uses `/data get entity <single-target> [path]`. Record any command-syntax mistake and its prevention here before finishing the change.
+- Derive FLOW execution timeouts from the thinking mode of the request that produced the current command batch, not from the numeric step alone; an approval follow-up can still be step 1 while using normal reasoning.
+- Every fatal `AgentFlowAction.Failed` path must transition the controller to `FAILED`; returning a failure action without changing state allows stale callers to submit another response.
+- Mode-specific agent instructions must be included on the actual provider request path; instructions used only by the SINGLE chat session do not affect standalone FLOW requests.
 
 
 ## Creations 
