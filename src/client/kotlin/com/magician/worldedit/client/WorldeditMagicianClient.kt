@@ -7,6 +7,8 @@ import com.magician.worldedit.client.chunk.ChunkSelectionMode
 import com.magician.worldedit.client.chunk.ChunkSelectionStageResult
 import com.magician.worldedit.client.chunk.ChunkSelectionState
 import com.magician.worldedit.client.chunk.ChunkSelectionWorldRenderer
+import com.magician.worldedit.client.chunk.LiveRegionInspection
+import com.magician.worldedit.client.chunk.RegionInspectionRequest
 import com.magician.worldedit.client.chunk.SelectionOperationMode
 import com.magician.worldedit.client.command.AgentFlowAction
 import com.magician.worldedit.client.command.AgentFlowController
@@ -233,6 +235,10 @@ object WorldeditMagicianClient : ClientModInitializer {
                     Command.SINGLE_SUCCESS
                 }),
         )
+        .then(literal("inspect").executes {
+            inspectRegion()
+            Command.SINGLE_SUCCESS
+        })
         .then(
             literal("command")
                 .then(literal("list").executes { listAvailableCommands(1); Command.SINGLE_SUCCESS })
@@ -384,6 +390,26 @@ object WorldeditMagicianClient : ClientModInitializer {
         if (page < pageCount) sendMessage("Next page: /wemc command list ${page + 1}")
         if (disabled.isNotEmpty()) {
             sendMessage("Stripped from agent context and execution: ${disabled.joinToString { it.displayName }}. Enable them in Config → Agent Command Permissions.")
+        }
+    }
+
+    /** Runs the bounded read-only inspection against the confirmed context scope. */
+    private fun inspectRegion() {
+        val scope = ChunkSelectionState.agentRegionScopeOrNull()
+        if (scope == null) {
+            sendMessage("No confirmed operate region. Select and confirm at least one chunk before inspecting.")
+            return
+        }
+        val request = RegionInspectionRequest(scope)
+        sendMessage("Inspecting ${scope.context.chunks.size} context chunk(s) read-only...")
+        LiveRegionInspection.inspectAsync(request).whenComplete { result, error ->
+            Minecraft.getInstance().execute {
+                if (error != null) {
+                    sendMessage("Region inspection failed: ${error.message ?: "unknown error"}")
+                } else if (result != null) {
+                    result.toPrompt().lineSequence().forEach(::sendMessage)
+                }
+            }
         }
     }
 

@@ -18,6 +18,7 @@ Conventions:
 |---|---|---|
 | `/wemc` | Open settings panel | none |
 | `/wemc config` | Open settings panel (`WemcConfigPanelScreen`) | none |
+| `/wemc inspect` | Read a bounded, read-only summary of the confirmed context region | reads loaded world state; no writes |
 
 ---
 
@@ -100,6 +101,19 @@ These are **help messages**, not query implementations.
 | `/wemc query entity` | `Vanilla Java Edition has no /entity query command. Use /data get entity <single-target> [path] through an enabled Query command.` |
 
 > The query handlers `TimeQueryHandler.query()` and `EntityQueryHandler.query()` exist in the source but are not wired to these literals. If you want to read world time or list nearby entities, run the vanilla commands directly.
+
+## `/wemc inspect` — Bounded region observation
+
+`/wemc inspect` requires a confirmed torch selection. It scans the derived
+context region, which includes the operate region and is read-only. The output
+contains loaded/unloaded chunk counts, a capped block palette, sampled
+non-air/total counts by Y band, and capped block-entity type/position entries.
+It never returns raw block-entity NBT and never changes the world.
+
+The scan runs on the integrated server thread in singleplayer. On a remote
+server it uses the client-visible level because a client-only mod has no access
+to the remote server's `ServerLevel`. An explicit truncation marker is shown
+when the volume, entity, or loaded-chunk boundary prevents a complete read.
 
 ---
 

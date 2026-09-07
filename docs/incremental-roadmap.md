@@ -10,14 +10,14 @@ This roadmap intentionally keeps each milestone small enough to compile, test, a
 - Enforce the safety invariant in the type API: a context must contain every operate chunk and Y level before a future read tool may use it.
 - Bound caller-supplied context margins and materialized chunk count; larger observation needs the later paged read design.
 
-## Next working day — explicit operate and context selection interaction
+## Completed today — bounded read-only region inspection
 
-- Add a torch target toggle between **OPERATE** and **CONTEXT**. The HUD must render the active target and show the operate region in blue, the read-only context in a visually distinct color, and drafts in orange.
-- Keep the default context derived until the player explicitly chooses CONTEXT; when a context draft is confirmed, reject it with actionable feedback unless it contains the full operate region.
-- Use a dedicated, rebindable key rather than overloading the existing operation/shape controls. The HUD hint must state the key and whether the displayed volume is writable or read-only.
-- Do not change command authorization in this UI change: only the operate region remains a write guard.
+- Add a bounded `inspect_region` request/result contract tied to the validated agent scope.
+- Summarize loaded context blocks as deterministic palette counts, Y-band density, and block-entity type/position entries.
+- Read integrated singleplayer worlds on the server thread; use only the client-visible level on remote servers.
+- Expose the manual `/wemc inspect` validation command without wiring observation into FLOW yet.
 
-## Then — safe world observation for the agent
+## Next working day — agent-facing observation contract
 
 - Add a live-world read tool that returns a compact, bounded block palette and block-entity summary from the context region.
 - Enforce a token/volume cap and report truncation rather than silently dropping data.
