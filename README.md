@@ -24,6 +24,7 @@ For the deeper protocol and implementation reference, see [the command reference
 | AI command generation | Ask an AI to return a fenced `wcl` program. WEMC compiles its supported WCL subset into concrete vanilla commands. |
 | Command control | Block sensitive server/admin command families, keep a curated command catalog for agent guidance, queue Single-mode output for review, and retain session histories of generated WCL and commands actually sent. |
 | Flow execution | Run bounded multi-step AI workflows that can wait for server chat/game responses before asking the model for the next WCL step. |
+| Region inspection | Run `/wemc inspect` for a bounded, read-only summary of the confirmed context: loaded chunks, block palette counts, height bands, and block-entity types/positions. |
 | Direct commands | Send one manually written command through the blacklist gate with `/wemc command run <command>`. |
 
 ## How it works
@@ -119,6 +120,23 @@ The first staged block initializes the inclusive vertical range from its Y level
 The selection state, HUD, preview renderer, Replace/Add/Remove operations, and Y-bound controls are functional. However, the current `MinecraftCommandExecutor` only performs WCL compilation and blacklist validation before calling the server connection. It does **not** inspect the confirmed chunk set or Y range when sending `/setblock`, `/fill`, `/clone`, block `data`, or block `item` commands.
 
 Treat selection as a planning/visualization tool in this version—not as an execution boundary. Verify coordinates and use approval mode before allowing block-edit commands to run.
+
+## Read-only region inspection
+
+After confirming at least one operate chunk, run:
+
+```mcfunction
+/wemc inspect
+```
+
+The command reads the wider context region, not only the writable operate
+region. In an integrated singleplayer world the scan runs on the server thread;
+on a remote server, a client-only mod can inspect only the client-visible view.
+The result is bounded to 131,072 block positions, 64 palette entries, and 128
+block entities. It reports unloaded chunks and omitted data instead of silently
+presenting a complete-looking snapshot. Only block-entity type and position are
+returned; raw NBT is never included. This manual command is a validation slice;
+it is not yet automatically exposed as a FLOW model tool.
 
 ## AI chat modes
 
