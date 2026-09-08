@@ -24,7 +24,7 @@ For the deeper protocol and implementation reference, see [the command reference
 | AI command generation | Ask an AI to return a fenced `wcl` program. WEMC compiles its supported WCL subset into concrete vanilla commands. |
 | Command control | Block sensitive server/admin command families, keep a curated command catalog for agent guidance, queue Single-mode output for review, and retain session histories of generated WCL and commands actually sent. |
 | Flow execution | Run bounded multi-step AI workflows that can wait for server chat/game responses before asking the model for the next WCL step. |
-| Region inspection | Run `/wemc inspect` for a bounded, read-only summary of the confirmed context: loaded chunks, block palette counts, height bands, and block-entity types/positions. |
+| Region inspection | Run `/wemc inspect` for a bounded, read-only summary of the confirmed context, or let a Flow agent request the same `inspect_region` tool before proposing an edit. |
 | Direct commands | Send one manually written command through the blacklist gate with `/wemc command run <command>`. |
 
 ## How it works
@@ -135,8 +135,10 @@ on a remote server, a client-only mod can inspect only the client-visible view.
 The result is bounded to 131,072 block positions, 64 palette entries, and 128
 block entities. It reports unloaded chunks and omitted data instead of silently
 presenting a complete-looking snapshot. Only block-entity type and position are
-returned; raw NBT is never included. This manual command is a validation slice;
-it is not yet automatically exposed as a FLOW model tool.
+returned; raw NBT is never included. In Flow mode the agent may request the same
+read-only operation with a `wemc-tool` JSON block; WEMC uses the immutable scope
+captured when the Flow started, rejects a missing or changed selection, and feeds
+the bounded result back before requesting the next model response.
 
 ## AI chat modes
 
@@ -170,6 +172,15 @@ Flow mode is the default. It starts a bounded state machine that can execute a W
 - A Flow response containing WCL but no plan compiles and executes immediately; it does not use the Single-mode approval queue.
 - A line containing only `<eof>` marks the last WCL step.
 - Defaults are capped at **30 AI requests**, **50 server steps**, and an **8-second** per-step response timeout (configurable within fixed limits).
+- Before building, the agent may return exactly one read-only `wemc-tool` block. The current supported request is:
+
+  ````markdown
+  ```wemc-tool
+  {"name":"inspect_region","arguments":{"max_blocks":131072,"max_palette_entries":64,"max_block_entities":128,"height_band_size":16}}
+  ```
+  ````
+
+  The tool reads the confirmed context region, never edits the world, and returns bounded palette, height-band, block-entity, loaded/unloaded-chunk, and truncation data. WEMC then sends that result back as the next Flow context.
 
 ```mcfunction
 /wemc operation flow

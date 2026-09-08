@@ -1,5 +1,7 @@
 package com.magician.worldedit.client.command
 
+import com.google.gson.JsonParser
+
 import com.magician.worldedit.client.command.AgentFlowController.FlowState
 
 /**
@@ -43,6 +45,13 @@ sealed interface FlowParseResult {
      */
     data class WclSource(val wclSource: String, val displayText: String?, val isEof: Boolean) : FlowParseResult
 
+    /** A provider-independent, read-only tool request. */
+    data class ToolRequest(
+        val name: String,
+        val argumentsJson: String,
+        val displayText: String?,
+    ) : FlowParseResult
+
     /** Agent said something with no commands and no plan — end the flow. */
     data class EndFlow(val plainText: String?) : FlowParseResult
 
@@ -63,6 +72,8 @@ object FlowResponseParser {
     private val INTERNAL_MARKER = Regex("""(?s)^\s*(?:Thus final answer|Non-cannon|This concludes|</?[a-z]+>).*$\s*""", RegexOption.IGNORE_CASE)
     // Matches ```wemc-plan ... ``` (plan can appear with or without commands)
     private val PLAN_BLOCK = Regex("""(?s)```wemc-plan\s*\n(.*?)```""", RegexOption.IGNORE_CASE)
+    // Matches one structured read-only tool request. The JSON body is validated below.
+    private val TOOL_BLOCK = Regex("""(?s)```wemc-tool\s*\n(.*?)```""", RegexOption.IGNORE_CASE)
     // Matches <eof> on its own line (with optional whitespace)
     private val EOF_MARKER = Regex("""(?m)^\s*<eof>\s*$""")
     // Matches the fields inside a plan block: "key: value"
@@ -74,14 +85,37 @@ object FlowResponseParser {
 
         val hasWcl = WCL_BLOCK.containsMatchIn(trimmed)
         val hasPlan = PLAN_BLOCK.containsMatchIn(trimmed)
+        val toolMatches = TOOL_BLOCK.findAll(trimmed).toList()
+        val hasTool = toolMatches.isNotEmpty()
         val hasEof = EOF_MARKER.containsMatchIn(trimmed)
 
         // Strip all block content to extract plain text
         val plainTextOutsideBlocks = buildString {
             val withoutWcl = WCL_BLOCK.replace(trimmed, "")
             val withoutPlan = PLAN_BLOCK.replace(withoutWcl, "")
-            val withoutEof = EOF_MARKER.replace(withoutPlan, "")
+            val withoutTool = TOOL_BLOCK.replace(withoutPlan, "")
+            val withoutEof = EOF_MARKER.replace(withoutTool, "")
             append(withoutEof.trim())
+        }
+
+        if (hasTool) {
+            if (toolMatches.size != 1) return FlowParseResult.Invalid("Return exactly one wemc-tool block per response.")
+            if (hasWcl || hasPlan || hasEof) {
+                return FlowParseResult.Invalid("A wemc-tool response cannot include WCL, a plan, or <eof>.")
+            }
+            val payload = runCatching { JsonParser.parseString(toolMatches.single().groupValues[1].trim()).asJsonObject }
+                .getOrElse { return FlowParseResult.Invalid("wemc-tool must contain one JSON object.") }
+            val name = runCatching {
+                payload.get("name")?.takeIf { !it.isJsonNull }?.asString?.trim()
+            }.getOrNull()
+                ?.takeIf { it.matches(Regex("[a-z0-9_]+")) }
+                ?: return FlowParseResult.Invalid("wemc-tool requires a lowercase name such as inspect_region.")
+            val arguments = payload.get("arguments")
+            if (arguments != null && !arguments.isJsonObject) {
+                return FlowParseResult.Invalid("wemc-tool arguments must be a JSON object.")
+            }
+            val argumentsJson = (arguments?.asJsonObject ?: com.google.gson.JsonObject()).toString()
+            return FlowParseResult.ToolRequest(name, argumentsJson, plainTextOutsideBlocks.takeIf { it.isNotEmpty() })
         }
 
         // Extract WCL source — strip thinking/reasoning noise from inside the block
@@ -259,11 +293,13 @@ sealed interface AgentFlowAction {
     data object PlanApprovedPrompt : AgentFlowAction
     /** WCL source received; needs compilation before execution. Caller should compile via WclPipeline. */
     data class WclReady(val wclSource: String, val displayText: String?, val isEof: Boolean) : AgentFlowAction
+    /** Tool request received; caller must execute it and feed the bounded result back. */
+    data class ToolReady(val name: String, val argumentsJson: String, val displayText: String?) : AgentFlowAction
     /** WCL compilation failed; error report is sent back to the agent for correction. */
     data class WclCompilationFailed(val errorReport: String) : AgentFlowAction
 
     /** Feed server responses back to the agent and ask for the next step. */
-    data class RequestContinuation(val context: String) : AgentFlowAction
+    data class RequestContinuation(val context: String, val canRequestObservation: Boolean = false) : AgentFlowAction
     /** Flow ended (eof reached, or plain text with no commands). */
     data class FlowEnded(val displayText: String?) : AgentFlowAction
     data class Failed(val message: String) : AgentFlowAction
@@ -334,6 +370,12 @@ class AgentFlowController(private val settings: AgentOperationSettings) {
                 state = if (result.isEof) FlowState.COMPLETED else FlowState.EXECUTING
                 AgentFlowAction.WclReady(result.wclSource, result.displayText, result.isEof)
             }
+
+            is FlowParseResult.ToolRequest -> AgentFlowAction.ToolReady(
+                result.name,
+                result.argumentsJson,
+                result.displayText,
+            )
 
             is FlowParseResult.PlanOnly -> {
                 totalSteps = result.steps
@@ -486,6 +528,19 @@ class AgentFlowController(private val settings: AgentOperationSettings) {
         aiRequestCount++
         state = FlowState.AWAITING_AGENT
         return AgentFlowAction.WclCompilationFailed(errorMsg)
+    }
+
+    /**
+     * Completes a read-only tool call and reserves the next bounded AI request.
+     * Tool execution itself is owned by the client/world adapter, not this state machine.
+     */
+    fun onToolResult(context: String): AgentFlowAction {
+        if (state != FlowState.AWAITING_AGENT) return AgentFlowAction.Noop
+        if (aiRequestCount >= norm.maxAiRequests) {
+            return fail("AI request limit reached (${norm.maxAiRequests}).")
+        }
+        aiRequestCount++
+        return AgentFlowAction.RequestContinuation(context, canRequestObservation = true)
     }
 
     private fun fail(msg: String): AgentFlowAction {

@@ -1,6 +1,8 @@
 package com.magician.worldedit.client
 
 import com.magician.worldedit.WorldeditMagician
+import com.magician.worldedit.client.chunk.AgentRegionScope
+import com.magician.worldedit.client.chunk.AgentRegionScopePrompt
 import com.magician.worldedit.client.chunk.ChunkPos
 import com.magician.worldedit.client.chunk.ChunkSelectionHud
 import com.magician.worldedit.client.chunk.ChunkSelectionMode
@@ -9,6 +11,7 @@ import com.magician.worldedit.client.chunk.ChunkSelectionState
 import com.magician.worldedit.client.chunk.ChunkSelectionWorldRenderer
 import com.magician.worldedit.client.chunk.LiveRegionInspection
 import com.magician.worldedit.client.chunk.RegionInspectionRequest
+import com.magician.worldedit.client.chunk.RegionInspectionTool
 import com.magician.worldedit.client.chunk.SelectionOperationMode
 import com.magician.worldedit.client.command.AgentFlowAction
 import com.magician.worldedit.client.command.AgentFlowController
@@ -589,7 +592,12 @@ object WorldeditMagicianClient : ClientModInitializer {
     }
 
     private fun startFlow(prompt: String, settings: OpenAiSettings = OpenAiSettingsStore.load()) {
-        val flow = ActiveFlow(prompt, settings, AgentFlowController(AgentOperationSettingsStore.load()))
+        val flow = ActiveFlow(
+            originalPrompt = prompt,
+            settings = settings,
+            controller = AgentFlowController(AgentOperationSettingsStore.load()),
+            scope = ChunkSelectionState.agentRegionScopeOrNull(),
+        )
         activeFlow = flow
         flow.controller.start()
         sendFlowRequest(flow, prompt)
@@ -703,7 +711,10 @@ object WorldeditMagicianClient : ClientModInitializer {
 
     private fun sendFlowRequest(flow: ActiveFlow, prompt: String) {
         val thinkingMode = flow.controller.thinkingModeForStep()
-        val flowPrompt = AgentStepPlanningPrompt.flowRequest(prompt)
+        val flowPrompt = AgentRegionScopePrompt.appendTo(
+            AgentStepPlanningPrompt.flowRequest(prompt),
+            flow.scope,
+        )
         sendMessage("[WEMC] Sending flow request to ${providerId(flow.settings.selectedProvider)}...")
         AiChatClient.send(
             flow.settings,
@@ -800,6 +811,7 @@ object WorldeditMagicianClient : ClientModInitializer {
             }
             is AgentFlowAction.Failed -> finishFlow(flow, action.message)
             AgentFlowAction.Noop -> Unit
+            is AgentFlowAction.ToolReady -> executeFlowTool(flow, action)
             // WCL is the sole generated executable form: compile, validate compiled output, then dispatch.
             is AgentFlowAction.WclReady -> {
                 val player = Minecraft.getInstance().player ?: return
@@ -827,10 +839,60 @@ object WorldeditMagicianClient : ClientModInitializer {
             }
             // RequestContinuation: feed server results back to the agent
             is AgentFlowAction.RequestContinuation -> {
-                sendFlowRequest(flow, "${flow.originalPrompt}\n\n${action.context}\n\nContinue with exactly the next step only. Return one ```wcl block``` for the next step. Add <eof> only if this is the last step.")
+                val nextInstruction = if (action.canRequestObservation) {
+                    "Continue with exactly the next step only. Return one ```wcl``` block, or one ```wemc-tool``` block if another read-only observation is needed. Add <eof> only if this is the last step."
+                } else {
+                    "Continue with exactly the next step only. Return one ```wcl``` block for the next step. Add <eof> only if this is the last step."
+                }
+                sendFlowRequest(flow, "${flow.originalPrompt}\n\n${action.context}\n\n$nextInstruction")
             }
             else -> { /* Legacy / unhandled action types — ignore */ }
         }
+    }
+
+    private fun executeFlowTool(flow: ActiveFlow, action: AgentFlowAction.ToolReady) {
+        action.displayText?.let { text ->
+            AgentResponsePresentation.displayText(text)?.chunked(240)?.forEach(::sendMessage)
+        }
+        if (action.name != RegionInspectionTool.NAME) {
+            feedFlowToolResult(flow, "Tool error: '${action.name}' is not available. Use inspect_region only.")
+            return
+        }
+        val scope = flow.scope
+        val currentScope = ChunkSelectionState.agentRegionScopeOrNull()
+        if (scope == null || currentScope == null || !sameScope(scope, currentScope)) {
+            feedFlowToolResult(
+                flow,
+                "Tool error: inspect_region requires the confirmed operate/context selection to remain present and unchanged.",
+            )
+            return
+        }
+        val request = try {
+            RegionInspectionTool.create(scope, action.argumentsJson)
+        } catch (error: IllegalArgumentException) {
+            feedFlowToolResult(flow, "Tool error: ${error.message ?: "invalid inspect_region arguments"}")
+            return
+        }
+        sendMessage("[WEMC] Agent requested a bounded read-only region inspection.")
+        LiveRegionInspection.inspectAsync(request).whenComplete { result, error ->
+            Minecraft.getInstance().execute {
+                if (activeFlow !== flow) return@execute
+                val context = if (error != null) {
+                    """=== WEMC TOOL RESULT: inspect_region ===
+                    error: ${error.message ?: "inspection failed"}
+                    === END WEMC TOOL RESULT ===""".trimIndent()
+                } else {
+                    """=== WEMC TOOL RESULT: inspect_region ===
+                    ${result?.toPrompt() ?: "error: inspection returned no result"}
+                    === END WEMC TOOL RESULT ===""".trimIndent()
+                }
+                feedFlowToolResult(flow, context)
+            }
+        }
+    }
+
+    private fun feedFlowToolResult(flow: ActiveFlow, context: String) {
+        handleFlowAction(flow, flow.controller.onToolResult(context))
     }
 
     private fun executeFlowCommands(flow: ActiveFlow, commands: List<String>, isEof: Boolean) {
@@ -949,7 +1011,16 @@ object WorldeditMagicianClient : ClientModInitializer {
         val originalPrompt: String,
         val settings: OpenAiSettings,
         val controller: AgentFlowController,
+        val scope: AgentRegionScope?,
     )
+
+    private fun sameScope(left: AgentRegionScope, right: AgentRegionScope): Boolean =
+        left.operate.chunks == right.operate.chunks &&
+            left.operate.minY == right.operate.minY &&
+            left.operate.maxY == right.operate.maxY &&
+            left.context.chunks == right.context.chunks &&
+            left.context.minY == right.context.minY &&
+            left.context.maxY == right.context.maxY
 
     private fun selectModel(qualifiedModel: String) {
         val separator = qualifiedModel.indexOf(':')
