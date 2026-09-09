@@ -25,10 +25,17 @@ This roadmap intentionally keeps each milestone small enough to compile, test, a
 - Execute the existing live inspection adapter on the correct game thread, then feed its bounded result into the next Flow request.
 - Keep tool calls read-only and count their continuation against the existing AI-request budget.
 
-## Next working day — directional observation and execution boundary
+## Completed today — agent-facing directional observation
 
-- Add a compact directional block-view tool for local shape understanding without sending full block samples.
-- Add a post-edit observation checkpoint that lets the agent compare a bounded read with its prior step before proposing repair commands.
+- Add a bounded `inspect_directional_view` tool for a compact front elevation centered on the captured player position and facing.
+- Let the model choose only bounded distance, lateral width, vertical offsets, and sample count; keep coordinates and write authority client-owned.
+- Return deterministic per-lateral lanes, Y rows, palette symbols, and explicit unknown/unloaded/out-of-scope counts.
+- Execute on the correct game thread and feed the result through the existing FLOW continuation budget.
+
+## Next working day — post-edit verification boundary
+
+- Add a post-edit observation checkpoint that records the completed batch and its bounded observation.
+- Require a fresh observation before repair commands can be proposed.
 - Connect command coordinate validation to the confirmed operate Y/chunk bounds before enabling larger autonomous builds.
 - Keep screenshots as a separate opt-in path after the textual observation contract is stable.
 

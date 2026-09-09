@@ -3,6 +3,8 @@ package com.magician.worldedit.client.command
 import com.magician.worldedit.client.chunk.AgentRegionScope
 import com.magician.worldedit.client.chunk.ChunkPos
 import com.magician.worldedit.client.chunk.ContextRegion
+import com.magician.worldedit.client.chunk.DirectionalViewRequest
+import com.magician.worldedit.client.chunk.DirectionalViewTool
 import com.magician.worldedit.client.chunk.OperateRegion
 import com.magician.worldedit.client.chunk.RegionInspectionRequest
 import com.magician.worldedit.client.chunk.RegionInspectionTool
@@ -106,5 +108,30 @@ class AgentObservationToolTest {
         )
         assertEquals("inspection result", continuation.context)
         assertIs<AgentFlowAction.Failed>(controller.onToolResult("second result"))
+    }
+
+    @Test
+    fun `flow parser recognizes the directional observation tool`() {
+        val parsed = assertIs<FlowParseResult.ToolRequest>(
+            FlowResponseParser.parse(
+                """```wemc-tool
+                {"name":"inspect_directional_view","arguments":{"max_distance":8}}
+                ```""".trimIndent(),
+            ),
+        )
+
+        assertEquals(DirectionalViewTool.NAME, parsed.name)
+        val request = DirectionalViewTool.create(scope, parsed.argumentsJson)
+        assertEquals(8, request.maxDistance)
+        assertEquals(DirectionalViewRequest.DEFAULT_HALF_WIDTH, request.halfWidth)
+    }
+
+    @Test
+    fun `flow prompt explains directional observation without granting coordinates`() {
+        val prompt = AgentStepPlanningPrompt.instructions(AgentOperationMode.FLOW)
+
+        assertTrue(prompt.contains("inspect_directional_view"))
+        assertTrue(prompt.contains("player-facing"))
+        assertTrue(prompt.contains("cannot choose coordinates"))
     }
 }

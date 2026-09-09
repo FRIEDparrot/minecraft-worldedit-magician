@@ -9,6 +9,8 @@ import com.magician.worldedit.client.chunk.ChunkSelectionMode
 import com.magician.worldedit.client.chunk.ChunkSelectionStageResult
 import com.magician.worldedit.client.chunk.ChunkSelectionState
 import com.magician.worldedit.client.chunk.ChunkSelectionWorldRenderer
+import com.magician.worldedit.client.chunk.DirectionalViewTool
+import com.magician.worldedit.client.chunk.LiveDirectionalViewInspection
 import com.magician.worldedit.client.chunk.LiveRegionInspection
 import com.magician.worldedit.client.chunk.RegionInspectionRequest
 import com.magician.worldedit.client.chunk.RegionInspectionTool
@@ -854,19 +856,15 @@ object WorldeditMagicianClient : ClientModInitializer {
         action.displayText?.let { text ->
             AgentResponsePresentation.displayText(text)?.chunked(240)?.forEach(::sendMessage)
         }
-        if (action.name != RegionInspectionTool.NAME) {
-            feedFlowToolResult(flow, "Tool error: '${action.name}' is not available. Use inspect_region only.")
-            return
+        when (action.name) {
+            RegionInspectionTool.NAME -> executeFlowRegionInspection(flow, action)
+            DirectionalViewTool.NAME -> executeFlowDirectionalView(flow, action)
+            else -> feedFlowToolResult(flow, "Tool error: '${action.name}' is not available. Use inspect_region or inspect_directional_view only.")
         }
-        val scope = flow.scope
-        val currentScope = ChunkSelectionState.agentRegionScopeOrNull()
-        if (scope == null || currentScope == null || !sameScope(scope, currentScope)) {
-            feedFlowToolResult(
-                flow,
-                "Tool error: inspect_region requires the confirmed operate/context selection to remain present and unchanged.",
-            )
-            return
-        }
+    }
+
+    private fun executeFlowRegionInspection(flow: ActiveFlow, action: AgentFlowAction.ToolReady) {
+        val scope = validatedFlowScope(flow) ?: return
         val request = try {
             RegionInspectionTool.create(scope, action.argumentsJson)
         } catch (error: IllegalArgumentException) {
@@ -889,6 +887,45 @@ object WorldeditMagicianClient : ClientModInitializer {
                 feedFlowToolResult(flow, context)
             }
         }
+    }
+
+    private fun executeFlowDirectionalView(flow: ActiveFlow, action: AgentFlowAction.ToolReady) {
+        val scope = validatedFlowScope(flow) ?: return
+        val request = try {
+            DirectionalViewTool.create(scope, action.argumentsJson)
+        } catch (error: IllegalArgumentException) {
+            feedFlowToolResult(flow, "Tool error: ${error.message ?: "invalid inspect_directional_view arguments"}")
+            return
+        }
+        sendMessage("[WEMC] Agent requested a bounded read-only directional view.")
+        LiveDirectionalViewInspection.inspectAsync(request).whenComplete { result, error ->
+            Minecraft.getInstance().execute {
+                if (activeFlow !== flow) return@execute
+                val context = if (error != null) {
+                    """=== WEMC TOOL RESULT: inspect_directional_view ===
+                    error: ${error.message ?: "directional view failed"}
+                    === END WEMC TOOL RESULT ===""".trimIndent()
+                } else {
+                    """=== WEMC TOOL RESULT: inspect_directional_view ===
+                    ${result?.toPrompt() ?: "error: directional view returned no result"}
+                    === END WEMC TOOL RESULT ===""".trimIndent()
+                }
+                feedFlowToolResult(flow, context)
+            }
+        }
+    }
+
+    private fun validatedFlowScope(flow: ActiveFlow): AgentRegionScope? {
+        val scope = flow.scope
+        val currentScope = ChunkSelectionState.agentRegionScopeOrNull()
+        if (scope == null || currentScope == null || !sameScope(scope, currentScope)) {
+            feedFlowToolResult(
+                flow,
+                "Tool error: observation requires the confirmed operate/context selection to remain present and unchanged.",
+            )
+            return null
+        }
+        return scope
     }
 
     private fun feedFlowToolResult(flow: ActiveFlow, context: String) {
