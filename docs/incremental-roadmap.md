@@ -15,14 +15,22 @@ This roadmap intentionally keeps each milestone small enough to compile, test, a
 - Add a bounded `inspect_region` request/result contract tied to the validated agent scope.
 - Summarize loaded context blocks as deterministic palette counts, Y-band density, and block-entity type/position entries.
 - Read integrated singleplayer worlds on the server thread; use only the client-visible level on remote servers.
-- Expose the manual `/wemc inspect` validation command without wiring observation into FLOW yet.
+- Expose the manual `/wemc inspect` validation command as the initial player-facing validation slice.
 
-## Next working day — agent-facing observation contract
+## Completed today — agent-facing observation contract
 
-- Add a live-world read tool that returns a compact, bounded block palette and block-entity summary from the context region.
-- Enforce a token/volume cap and report truncation rather than silently dropping data.
-- Keep chunk reads server-thread-only and do not modify region files while a world is open.
-- Do not make the agent download or execute arbitrary web content; any future build-reference importer must use an allowlisted, user-visible source and deserialize untrusted data defensively.
+- Add a provider-independent `wemc-tool` envelope for `inspect_region`.
+- Parse and validate bounded numeric limits without letting the model choose a world scope.
+- Capture the immutable operate/context scope at Flow start; reject a missing or changed selection before reading.
+- Execute the existing live inspection adapter on the correct game thread, then feed its bounded result into the next Flow request.
+- Keep tool calls read-only and count their continuation against the existing AI-request budget.
+
+## Next working day — directional observation and execution boundary
+
+- Add a compact directional block-view tool for local shape understanding without sending full block samples.
+- Add a post-edit observation checkpoint that lets the agent compare a bounded read with its prior step before proposing repair commands.
+- Connect command coordinate validation to the confirmed operate Y/chunk bounds before enabling larger autonomous builds.
+- Keep screenshots as a separate opt-in path after the textual observation contract is stable.
 
 ## Later — build verification loop
 

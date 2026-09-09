@@ -1,5 +1,6 @@
 package com.magician.worldedit.client.chunk
 
+import com.google.gson.JsonParser
 import net.minecraft.client.Minecraft
 import net.minecraft.core.BlockPos
 import net.minecraft.core.registries.BuiltInRegistries
@@ -42,6 +43,45 @@ data class RegionInspectionRequest(
         const val MAX_PALETTE_ENTRIES = 256
         const val MAX_BLOCK_ENTITIES = 512
         const val MAX_HEIGHT_BAND_SIZE = 64
+    }
+}
+
+/** Builds the bounded `inspect_region` request from a model tool payload. */
+object RegionInspectionTool {
+    const val NAME = "inspect_region"
+
+    private val ARGUMENT_NAMES = setOf(
+        "max_blocks",
+        "max_palette_entries",
+        "max_block_entities",
+        "height_band_size",
+    )
+
+    /**
+     * Parses only inspection limits; the confirmed scope is always supplied by
+     * the client and can never be selected by the model.
+     */
+    fun create(scope: AgentRegionScope, argumentsJson: String): RegionInspectionRequest {
+        val arguments = runCatching { JsonParser.parseString(argumentsJson).asJsonObject }
+            .getOrElse { throw IllegalArgumentException("inspect_region arguments must be a JSON object.", it) }
+        val unknown = arguments.keySet() - ARGUMENT_NAMES
+        require(unknown.isEmpty()) { "inspect_region does not support argument(s): ${unknown.sorted().joinToString()}." }
+        return RegionInspectionRequest(
+            scope = scope,
+            maxBlocks = intArgument(arguments, "max_blocks", RegionInspectionRequest.DEFAULT_MAX_BLOCKS),
+            maxPaletteEntries = intArgument(arguments, "max_palette_entries", RegionInspectionRequest.DEFAULT_MAX_PALETTE_ENTRIES),
+            maxBlockEntities = intArgument(arguments, "max_block_entities", RegionInspectionRequest.DEFAULT_MAX_BLOCK_ENTITIES),
+            heightBandSize = intArgument(arguments, "height_band_size", RegionInspectionRequest.DEFAULT_HEIGHT_BAND_SIZE),
+        )
+    }
+
+    private fun intArgument(arguments: com.google.gson.JsonObject, name: String, default: Int): Int {
+        val value = arguments.get(name) ?: return default
+        require(value.isJsonPrimitive && value.asJsonPrimitive.isNumber) { "$name must be an integer." }
+        val parsed = value.asString.toLongOrNull()
+            ?: throw IllegalArgumentException("$name must be an integer.")
+        require(parsed in Int.MIN_VALUE..Int.MAX_VALUE) { "$name is outside the integer range." }
+        return parsed.toInt()
     }
 }
 
@@ -279,14 +319,20 @@ object LiveRegionInspection {
         var scanLimitReached = false
         val context = request.scope.context
 
-        for (chunk in context.chunks.sortedWith(compareBy<ChunkPos> { it.x }.thenBy { it.z })) {
+        val chunks = context.chunks.sortedWith(compareBy<ChunkPos> { it.x }.thenBy { it.z })
+        for (chunk in chunks) {
             val startX = chunk.x.toLong() * 16L
             val startZ = chunk.z.toLong() * 16L
             if (startX < Int.MIN_VALUE || startX + 15L > Int.MAX_VALUE || startZ < Int.MIN_VALUE || startZ + 15L > Int.MAX_VALUE) {
                 continue
             }
-            if (!view.isChunkLoaded(chunk)) continue
-            loaded += chunk
+            if (view.isChunkLoaded(chunk)) loaded += chunk
+        }
+
+        for (chunk in chunks) {
+            if (chunk !in loaded) continue
+            val startX = chunk.x.toLong() * 16L
+            val startZ = chunk.z.toLong() * 16L
             var y = maxOf(context.minY, level.minY)
             val maxY = minOf(context.maxY, level.maxY - 1)
             while (y <= maxY) {
