@@ -27,9 +27,13 @@ class DirectionalViewTest {
         val cells = DirectionalViewLayout.cells(anchor, request)
 
         assertEquals(18, cells.size)
-        assertEquals(BlockPosition(7, 64, 8), cells.first { it.distance == 0 && it.lateral == -1 && it.y == 64 }.position)
+        assertEquals(BlockPosition(9, 64, 8), cells.first { it.distance == 0 && it.lateral == -1 && it.y == 64 }.position)
         assertEquals(BlockPosition(8, 64, 10), cells.first { it.distance == 2 && it.lateral == 0 && it.y == 64 }.position)
-        assertEquals(BlockPosition(9, 65, 10), cells.first { it.distance == 2 && it.lateral == 1 && it.y == 65 }.position)
+        assertEquals(BlockPosition(7, 65, 10), cells.first { it.distance == 2 && it.lateral == 1 && it.y == 65 }.position)
+
+        val northAnchor = DirectionalViewAnchor(BlockPosition(8, 64, 8), ViewDirection.NORTH)
+        val northCells = DirectionalViewLayout.cells(northAnchor, request)
+        assertEquals(BlockPosition(9, 64, 8), northCells.first { it.distance == 0 && it.lateral == 1 && it.y == 64 }.position)
     }
 
     @Test
@@ -77,6 +81,27 @@ class DirectionalViewTest {
         assertTrue(result.truncated)
         assertTrue(result.toPrompt().contains("unknown_cells: 15"))
         assertTrue(result.toPrompt().contains("unloaded_chunks: [(1,0)]"))
+    }
+
+    @Test
+    fun `out of scope cells are not double counted as unknown cells`() {
+        val anchor = DirectionalViewAnchor(BlockPosition(8, 64, 8), ViewDirection.SOUTH)
+        val samples = DirectionalViewLayout.cells(anchor, request).take(3).map {
+            DirectionalBlockSample(it, "minecraft:stone", isAir = false)
+        }
+
+        val result = DirectionalViewSummarizer.summarize(
+            request,
+            anchor,
+            samples,
+            outOfScopeBlockCount = 5,
+        )
+
+        assertEquals(18, result.requestedBlockCount)
+        assertEquals(3, result.scannedBlockCount)
+        assertEquals(10, result.omittedBlockCount)
+        assertTrue(result.toPrompt().contains("unknown_cells: 10"))
+        assertTrue(result.toPrompt().contains("out_of_scope_cells: 5"))
     }
 
     @Test

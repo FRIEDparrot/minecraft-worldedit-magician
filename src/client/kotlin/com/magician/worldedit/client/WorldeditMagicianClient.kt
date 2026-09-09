@@ -875,6 +875,10 @@ object WorldeditMagicianClient : ClientModInitializer {
         LiveRegionInspection.inspectAsync(request).whenComplete { result, error ->
             Minecraft.getInstance().execute {
                 if (activeFlow !== flow) return@execute
+                if (!isFlowScopeCurrent(flow)) {
+                    feedFlowToolResult(flow, "Tool error: observation discarded because the confirmed operate/context selection changed during the read.")
+                    return@execute
+                }
                 val context = if (error != null) {
                     """=== WEMC TOOL RESULT: inspect_region ===
                     error: ${error.message ?: "inspection failed"}
@@ -901,6 +905,10 @@ object WorldeditMagicianClient : ClientModInitializer {
         LiveDirectionalViewInspection.inspectAsync(request).whenComplete { result, error ->
             Minecraft.getInstance().execute {
                 if (activeFlow !== flow) return@execute
+                if (!isFlowScopeCurrent(flow)) {
+                    feedFlowToolResult(flow, "Tool error: observation discarded because the confirmed operate/context selection changed during the read.")
+                    return@execute
+                }
                 val context = if (error != null) {
                     """=== WEMC TOOL RESULT: inspect_directional_view ===
                     error: ${error.message ?: "directional view failed"}
@@ -916,16 +924,21 @@ object WorldeditMagicianClient : ClientModInitializer {
     }
 
     private fun validatedFlowScope(flow: ActiveFlow): AgentRegionScope? {
-        val scope = flow.scope
-        val currentScope = ChunkSelectionState.agentRegionScopeOrNull()
-        if (scope == null || currentScope == null || !sameScope(scope, currentScope)) {
+        if (!isFlowScopeCurrent(flow)) {
             feedFlowToolResult(
                 flow,
                 "Tool error: observation requires the confirmed operate/context selection to remain present and unchanged.",
             )
             return null
         }
-        return scope
+        return flow.scope
+    }
+
+    /** Rechecks the immutable scope before an asynchronous observation is fed back. */
+    private fun isFlowScopeCurrent(flow: ActiveFlow): Boolean {
+        val flowScope = flow.scope ?: return false
+        val currentScope = ChunkSelectionState.agentRegionScopeOrNull() ?: return false
+        return sameScope(flowScope, currentScope)
     }
 
     private fun feedFlowToolResult(flow: ActiveFlow, context: String) {

@@ -64,9 +64,9 @@ enum class ViewDirection(
     private val rightX: Int,
     private val rightZ: Int,
 ) {
-    NORTH("north", 0, -1, -1, 0),
+    NORTH("north", 0, -1, 1, 0),
     EAST("east", 1, 0, 0, 1),
-    SOUTH("south", 0, 1, 1, 0),
+    SOUTH("south", 0, 1, -1, 0),
     WEST("west", -1, 0, 0, -1);
 
     fun position(anchor: BlockPosition, distance: Int, lateral: Int, y: Int): BlockPosition = BlockPosition(
@@ -231,6 +231,7 @@ object DirectionalViewSummarizer {
             )
         }
         val requested = layout.size.toLong()
+        val outOfScope = outOfScopeBlockCount.coerceIn(0L, requested)
         return DirectionalViewResult(
             anchor = anchor,
             maxDistance = request.maxDistance,
@@ -239,8 +240,8 @@ object DirectionalViewSummarizer {
             maxY = maxY,
             requestedBlockCount = requested,
             scannedBlockCount = boundedSamples.size.toLong(),
-            omittedBlockCount = (requested - boundedSamples.size).coerceAtLeast(0L),
-            outOfScopeBlockCount = outOfScopeBlockCount,
+            omittedBlockCount = (requested - outOfScope - boundedSamples.size).coerceAtLeast(0L),
+            outOfScopeBlockCount = outOfScope,
             loadedChunks = loadedChunks,
             unloadedChunks = unloadedChunks,
             palette = palette,
