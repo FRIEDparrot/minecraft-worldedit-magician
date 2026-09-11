@@ -127,6 +127,14 @@ class AgentObservationToolTest {
     }
 
     @Test
+    fun `flow prompt requires a fresh post-edit observation before repairs`() {
+        val prompt = AgentStepPlanningPrompt.instructions(AgentOperationMode.FLOW)
+
+        assertTrue(prompt.contains("fresh bounded post-edit observation"))
+        assertTrue(prompt.contains("before you propose a repair"))
+    }
+
+    @Test
     fun `flow prompt explains directional observation without granting coordinates`() {
         val prompt = AgentStepPlanningPrompt.instructions(AgentOperationMode.FLOW)
 

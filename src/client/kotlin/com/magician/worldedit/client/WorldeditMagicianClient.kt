@@ -814,6 +814,7 @@ object WorldeditMagicianClient : ClientModInitializer {
             is AgentFlowAction.Failed -> finishFlow(flow, action.message)
             AgentFlowAction.Noop -> Unit
             is AgentFlowAction.ToolReady -> executeFlowTool(flow, action)
+            is AgentFlowAction.RequestPostEditObservation -> executeFlowPostEditObservation(flow, action)
             // WCL is the sole generated executable form: compile, validate compiled output, then dispatch.
             is AgentFlowAction.WclReady -> {
                 val player = Minecraft.getInstance().player ?: return
@@ -849,6 +850,50 @@ object WorldeditMagicianClient : ClientModInitializer {
                 sendFlowRequest(flow, "${flow.originalPrompt}\n\n${action.context}\n\n$nextInstruction")
             }
             else -> { /* Legacy / unhandled action types — ignore */ }
+        }
+    }
+
+    private fun executeFlowPostEditObservation(flow: ActiveFlow, action: AgentFlowAction.RequestPostEditObservation) {
+        val scope = flow.scope
+        if (scope == null || !isFlowScopeCurrent(flow)) {
+            handleFlowAction(
+                flow,
+                flow.controller.onPostEditObservationFailure("confirmed operate/context selection is unavailable or changed"),
+            )
+            return
+        }
+        val request = RegionInspectionRequest(scope)
+        sendMessage("[WEMC] Verifying the completed edit with a fresh bounded context read.")
+        LiveRegionInspection.inspectAsync(request).whenComplete { result, error ->
+            Minecraft.getInstance().execute {
+                if (activeFlow !== flow) return@execute
+                if (!isFlowScopeCurrent(flow)) {
+                    handleFlowAction(
+                        flow,
+                        flow.controller.onPostEditObservationFailure("confirmed operate/context selection changed during verification"),
+                    )
+                    return@execute
+                }
+                if (error != null) {
+                    handleFlowAction(
+                        flow,
+                        flow.controller.onPostEditObservationFailure(error.message ?: "post-edit inspection failed"),
+                    )
+                    return@execute
+                }
+                val observation = result?.toPrompt()
+                if (observation == null) {
+                    handleFlowAction(
+                        flow,
+                        flow.controller.onPostEditObservationFailure("post-edit inspection returned no result"),
+                    )
+                    return@execute
+                }
+                handleFlowAction(
+                    flow,
+                    flow.controller.onPostEditObservation(observation),
+                )
+            }
         }
     }
 
@@ -957,7 +1002,7 @@ object WorldeditMagicianClient : ClientModInitializer {
             finishFlow(flow, null)
         } else {
             // Multi-step: monitor server responses then ask for next
-            flow.controller.markStepDispatched(System.currentTimeMillis())
+            flow.controller.markStepDispatched(System.currentTimeMillis(), commands)
             sendMessage("[WEMC] Step ${flow.controller.currentStepNumber()} sent ${commands.size} command(s); monitoring server responses...")
         }
     }

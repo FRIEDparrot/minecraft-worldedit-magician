@@ -32,12 +32,19 @@ This roadmap intentionally keeps each milestone small enough to compile, test, a
 - Return deterministic per-lateral lanes, Y rows, palette symbols, and explicit unknown/unloaded/out-of-scope counts.
 - Execute on the correct game thread and feed the result through the existing FLOW continuation budget.
 
-## Next working day — post-edit verification boundary
+## Completed today — post-edit verification boundary
 
-- Add a post-edit observation checkpoint that records the completed batch and its bounded observation.
-- Require a fresh observation before repair commands can be proposed.
-- Connect command coordinate validation to the confirmed operate Y/chunk bounds before enabling larger autonomous builds.
-- Keep screenshots as a separate opt-in path after the textual observation contract is stable.
+- Record the dispatched command batch together with bounded server feedback before requesting another AI step.
+- Require a fresh `inspect_region` read of the captured operate/context scope before the agent can propose a repair or next non-terminal batch.
+- Reject stale or missing scope and failed verification reads instead of unlocking an unverified repair.
+- Keep the change UI-free: verification is automatic and does not add a player decision.
+
+## Next working day — terminal verification and write-boundary validation
+
+- Decide whether terminal `<eof>` batches should also run the same verification before ending the flow, while preserving the one-request budget contract.
+- Connect WCL coordinate validation to the confirmed operate Y/chunk bounds before enabling larger autonomous builds.
+- Add a bounded retry policy for transient observation failures rather than ending the flow immediately.
+- Exercise the checkpoint in a running integrated-server client and verify the exact chat/status presentation.
 
 ## Later — build verification loop
 
