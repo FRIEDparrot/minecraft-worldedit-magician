@@ -818,7 +818,12 @@ object WorldeditMagicianClient : ClientModInitializer {
             // WCL is the sole generated executable form: compile, validate compiled output, then dispatch.
             is AgentFlowAction.WclReady -> {
                 val player = Minecraft.getInstance().player ?: return
-                when (val compiled = MinecraftCommandExecutor.compileWcl(action.wclSource, player.position())) {
+                when (val compiled = MinecraftCommandExecutor.compileWcl(
+                    wclSource = action.wclSource,
+                    playerPos = player.position(),
+                    scope = flow.scope,
+                    enforceScope = true,
+                )) {
                     is WclResult.Err -> {
                         val error = "WCL compilation error: ${compiled.msg}"
                         sendMessage(error)

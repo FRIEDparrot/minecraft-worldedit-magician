@@ -25,6 +25,7 @@ object AgentRegionScopePrompt {
         appendLine("operate (write): chunks=${formatChunks(scope.operate.chunks)} y=${scope.operate.minY}..${scope.operate.maxY}")
         appendLine("context (read-only): chunks=${formatChunks(scope.context.chunks)} y=${scope.context.minY}..${scope.context.maxY}")
         appendLine("Only the operate area is writable; context is observation-only.")
+        appendLine("Known WCL block/entity coordinates are checked before dispatch; keep writes inside operate and clone sources inside context.")
         append("=== END WEMC REGION SCOPE ===")
     }
 
