@@ -63,6 +63,22 @@ class ChunkSelectionStateTest {
     }
 
     @Test
+    fun `dimension change clears confirmed and pending selections`() {
+        val overworld = "minecraft:overworld"
+        val nether = "minecraft:the_nether"
+        ChunkSelectionState.stageChunkSelection(ChunkPos(3, 5), overworld)
+        assertNotNull(ChunkSelectionState.confirmPendingSelection())
+        ChunkSelectionState.stageChunkSelection(ChunkPos(8, 9), overworld)
+
+        assertTrue(ChunkSelectionState.clearIfDimensionChanged(nether))
+        assertTrue(ChunkSelectionState.selectedChunks.isEmpty())
+        assertNull(ChunkSelectionState.pendingSelection)
+        assertNull(ChunkSelectionState.pendingFirstCorner)
+        assertNull(ChunkSelectionState.selectionDimensionKeyOrNull())
+        assertFalse(ChunkSelectionState.clearIfDimensionChanged(nether))
+    }
+
+    @Test
     fun `vertical range moves as a fixed-height band and clamps to world bounds`() {
         ChunkSelectionState.initializeYRange(anchorY = 100, worldMinY = -64, worldMaxY = 319)
         assertEquals(100, ChunkSelectionState.config.minY)

@@ -15,6 +15,7 @@ import com.magician.worldedit.client.chunk.LiveRegionInspection
 import com.magician.worldedit.client.chunk.RegionInspectionRequest
 import com.magician.worldedit.client.chunk.RegionInspectionTool
 import com.magician.worldedit.client.chunk.SelectionOperationMode
+import com.magician.worldedit.client.chunk.WorldDimensionKey
 import com.magician.worldedit.client.command.AgentFlowAction
 import com.magician.worldedit.client.command.AgentFlowController
 import com.magician.worldedit.client.command.AgentOperationMode
@@ -147,6 +148,10 @@ object WorldeditMagicianClient : ClientModInitializer {
         }
 
         ClientTickEvents.END_CLIENT_TICK.register {
+            clearSelectionForDimension(Minecraft.getInstance().level?.let { WorldDimensionKey.from(it) })
+        }
+
+        ClientTickEvents.END_CLIENT_TICK.register {
             activeFlow?.let { flow ->
                 val action = flow.controller.completeStepIfReady(System.currentTimeMillis())
                 if (action !is AgentFlowAction.Noop) handleFlowAction(flow, action)
@@ -164,16 +169,18 @@ object WorldeditMagicianClient : ClientModInitializer {
                 return@register InteractionResult.PASS
             }
 
+            if (clearSelectionForDimension(WorldDimensionKey.from(world))) return@register InteractionResult.FAIL
             ChunkSelectionState.initializeYRange(pos.y, world.minY, world.maxY - 1)
-            stageChunkSelection(ChunkPos(pos.x shr 4, pos.z shr 4))
+            stageChunkSelection(ChunkPos(pos.x shr 4, pos.z shr 4), WorldDimensionKey.from(world))
             InteractionResult.FAIL
         }
 
-        UseBlockCallback.EVENT.register { player, _, hand, _ ->
+        UseBlockCallback.EVENT.register { player, world, hand, _ ->
             if (!isSelectionTorch(player.getItemInHand(hand)) || Minecraft.getInstance().screen != null) {
                 return@register InteractionResult.PASS
             }
 
+            if (clearSelectionForDimension(WorldDimensionKey.from(world))) return@register InteractionResult.FAIL
             if (ChunkSelectionState.confirmPendingSelection() != null) {
                 sendSelectionMessage("Selection confirmed: ${ChunkSelectionState.selectedChunkCount()} chunk(s).")
                 InteractionResult.FAIL
@@ -182,11 +189,12 @@ object WorldeditMagicianClient : ClientModInitializer {
             }
         }
 
-        UseItemCallback.EVENT.register { player, _, hand ->
+        UseItemCallback.EVENT.register { player, world, hand ->
             if (!isSelectionTorch(player.getItemInHand(hand)) || Minecraft.getInstance().screen != null) {
                 return@register InteractionResult.PASS
             }
 
+            if (clearSelectionForDimension(WorldDimensionKey.from(world))) return@register InteractionResult.FAIL
             if (ChunkSelectionState.confirmPendingSelection() != null) {
                 sendSelectionMessage("Selection confirmed: ${ChunkSelectionState.selectedChunkCount()} chunk(s).")
                 InteractionResult.FAIL
@@ -817,6 +825,10 @@ object WorldeditMagicianClient : ClientModInitializer {
             is AgentFlowAction.RequestPostEditObservation -> executeFlowPostEditObservation(flow, action)
             // WCL is the sole generated executable form: compile, validate compiled output, then dispatch.
             is AgentFlowAction.WclReady -> {
+                if (flow.scope != null && !isFlowScopeCurrent(flow)) {
+                    finishFlow(flow, "Flow stopped because the confirmed selection changed or the player changed dimension.")
+                    return
+                }
                 val player = Minecraft.getInstance().player ?: return
                 when (val compiled = MinecraftCommandExecutor.compileWcl(
                     wclSource = action.wclSource,
@@ -1114,13 +1126,7 @@ object WorldeditMagicianClient : ClientModInitializer {
         val scope: AgentRegionScope?,
     )
 
-    private fun sameScope(left: AgentRegionScope, right: AgentRegionScope): Boolean =
-        left.operate.chunks == right.operate.chunks &&
-            left.operate.minY == right.operate.minY &&
-            left.operate.maxY == right.operate.maxY &&
-            left.context.chunks == right.context.chunks &&
-            left.context.minY == right.context.minY &&
-            left.context.maxY == right.context.maxY
+    private fun sameScope(left: AgentRegionScope, right: AgentRegionScope): Boolean = left.hasSameBoundaryAs(right)
 
     private fun selectModel(qualifiedModel: String) {
         val separator = qualifiedModel.indexOf(':')
@@ -1211,8 +1217,8 @@ object WorldeditMagicianClient : ClientModInitializer {
 
     private fun isSelectionTorch(stack: ItemStack): Boolean = stack.item == Items.TORCH
 
-    private fun stageChunkSelection(chunk: ChunkPos) {
-        when (val result = ChunkSelectionState.stageChunkSelection(chunk)) {
+    private fun stageChunkSelection(chunk: ChunkPos, dimensionKey: String) {
+        when (val result = ChunkSelectionState.stageChunkSelection(chunk, dimensionKey)) {
             is ChunkSelectionStageResult.FirstCorner -> {
                 sendSelectionMessage("First corner: ${result.chunk.x}, ${result.chunk.z}. Wheel moves the corner; right-click confirms; Delete cancels.")
             }
@@ -1257,6 +1263,17 @@ object WorldeditMagicianClient : ClientModInitializer {
         Minecraft.getInstance().player?.displayClientMessage(Component.literal("[WEMC] $message"), true)
     }
 
+    /** Clears a dimension-bound selection and stops any flow that captured it. */
+    private fun clearSelectionForDimension(currentDimensionKey: String?): Boolean {
+        val selectedDimensionKey = ChunkSelectionState.selectionDimensionKeyOrNull()
+        if (!ChunkSelectionState.clearIfDimensionChanged(currentDimensionKey)) return false
+        sendSelectionMessage("Selection cleared because the player changed dimension or left the world.")
+        activeFlow
+            ?.takeIf { it.scope?.dimensionKey == selectedDimensionKey }
+            ?.let { finishFlow(it, "Flow stopped because the player changed dimension and the selection was cleared.") }
+        return true
+    }
+
     private fun isControlDown(): Boolean {
         val window = Minecraft.getInstance().window
         return InputConstants.isKeyDown(window, GLFW.GLFW_KEY_LEFT_CONTROL) ||
@@ -1287,6 +1304,7 @@ object WorldeditMagicianClient : ClientModInitializer {
         }
 
         val level = player.level()
+        if (clearSelectionForDimension(WorldDimensionKey.from(level))) return true
         val shiftDown = isShiftDown()
         val altDown = isAltDown()
         return when {

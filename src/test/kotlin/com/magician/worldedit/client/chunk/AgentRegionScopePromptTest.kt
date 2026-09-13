@@ -46,6 +46,17 @@ class AgentRegionScopePromptTest {
     }
 
     @Test
+    fun `scope prompt identifies the dimension where the region was selected`() {
+        val scope = AgentRegionScope.create(
+            operate = OperateRegion(setOf(ChunkPos(0, 0)), minY = 64, maxY = 70),
+            context = ContextRegion(setOf(ChunkPos(0, 0)), minY = 59, maxY = 75),
+            dimensionKey = "minecraft:the_nether",
+        )
+
+        assertTrue(AgentRegionScopePrompt.describe(scope).contains("dimension: minecraft:the_nether"))
+    }
+
+    @Test
     fun `appending no scope preserves the player message exactly`() {
         assertEquals("  Build a bridge  ", AgentRegionScopePrompt.appendTo("  Build a bridge  ", null))
     }
