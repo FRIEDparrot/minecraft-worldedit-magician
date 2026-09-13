@@ -1013,15 +1013,11 @@ object WorldeditMagicianClient : ClientModInitializer {
             finishFlow(flow, "Flow step ${flow.controller.currentStepNumber()} was not sent: $commandStatus")
             return
         }
-        if (isEof) {
-            // Single-shot: done after execution
-            sendMessage("[WEMC] Flow finished — ${commands.size} command(s) executed.")
-            finishFlow(flow, null)
-        } else {
-            // Multi-step: monitor server responses then ask for next
-            flow.controller.markStepDispatched(System.currentTimeMillis(), commands)
-            sendMessage("[WEMC] Step ${flow.controller.currentStepNumber()} sent ${commands.size} command(s); monitoring server responses...")
-        }
+        // Both terminal and non-terminal batches are verified before the flow ends
+        // or the agent is allowed to propose the next batch.
+        flow.controller.markStepDispatched(System.currentTimeMillis(), commands)
+        val status = if (isEof) "monitoring final result before completion..." else "monitoring server responses..."
+        sendMessage("[WEMC] Step ${flow.controller.currentStepNumber()} sent ${commands.size} command(s); $status")
     }
 
     private fun sendContinuationPrompt(flow: ActiveFlow) {

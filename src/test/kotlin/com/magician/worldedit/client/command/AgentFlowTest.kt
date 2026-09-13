@@ -180,6 +180,35 @@ reason: Need to clear area first
     }
 
     @Test
+    fun `terminal flow batch is verified before the flow ends`() {
+        val controller = AgentFlowController(AgentOperationSettings())
+        controller.start()
+
+        val ready = assertIs<AgentFlowAction.WclReady>(
+            controller.onAgentResponse(
+                """```wcl
+setblock ~ ~ ~ stone
+```
+<eof>""",
+            ),
+        )
+        assertTrue(ready.isEof)
+
+        controller.markStepDispatched(nowMillis = 0, commands = listOf("setblock 0 64 0 stone"))
+        val checkpoint = assertIs<AgentFlowAction.RequestPostEditObservation>(
+            controller.completeStepIfReady(nowMillis = 8_000),
+        )
+        assertTrue(checkpoint.completedStepContext.contains("setblock 0 64 0 stone"))
+
+        assertIs<AgentFlowAction.FlowEnded>(
+            controller.onPostEditObservation("verified terminal edit"),
+        )
+        assertIs<AgentFlowAction.Noop>(controller.onAgentResponse("""```wcl
+setblock ~1 ~ ~ stone
+```"""))
+    }
+
+    @Test
     fun `one-step flow response does not require plan approval`() {
         val controller = AgentFlowController(AgentOperationSettings())
         controller.start()

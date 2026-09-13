@@ -112,7 +112,7 @@ object AgentStepPlanningPrompt {
             appendLine("  <WCL program>")
             appendLine("  ```")
             appendLine()
-            appendLine("After the wcl program, add <eof> on its own line if the task is finished after this batch.")
+            appendLine("After the wcl program, add <eof> on its own line if the task is finished after this batch. WEMC verifies the final result before reporting completion.")
             appendLine("Omit <eof> if more steps follow — WEMC will monitor the server, take a fresh bounded post-edit observation, and then send the completed batch plus observation before you propose a repair or next batch.")
             appendLine()
             appendLine("Read-only world observation tool:")

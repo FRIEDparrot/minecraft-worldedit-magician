@@ -317,9 +317,9 @@ sealed interface AgentFlowAction {
  *   AWAITING_AGENT → (plain text) → COMPLETED (display and end)
  *   AWAITING_PLAN_APPROVAL → (approve) → AWAITING_AGENT (planApproved=true, continuation prompt)
  *   AWAITING_PLAN_APPROVAL → (reject) → COMPLETED (silently)
- *   EXECUTING → (has eof) → COMPLETED
  *   EXECUTING → (batch complete) → AWAITING_POST_EDIT_OBSERVATION
- *   AWAITING_POST_EDIT_OBSERVATION → (fresh read) → AWAITING_AGENT
+ *   AWAITING_POST_EDIT_OBSERVATION → (fresh read, terminal batch) → COMPLETED
+ *   AWAITING_POST_EDIT_OBSERVATION → (fresh read, non-terminal batch) → AWAITING_AGENT
  */
 class AgentFlowController(private val settings: AgentOperationSettings) {
 
@@ -342,6 +342,7 @@ class AgentFlowController(private val settings: AgentOperationSettings) {
     private var serverStepCount = 0
     private var dispatchedCommands: List<String> = emptyList()
     private var pendingPostEditContext: String? = null
+    private var terminalStepPending = false
     /** First WCL program bundled with a plan, held until approval. */
     private var pendingPlanWcl: String? = null
     private var pendingPlanIsEof = false
@@ -365,6 +366,7 @@ class AgentFlowController(private val settings: AgentOperationSettings) {
         pendingResponse = mutableListOf()
         dispatchedCommands = emptyList()
         pendingPostEditContext = null
+        terminalStepPending = false
         return AgentFlowAction.Noop
     }
 
@@ -382,7 +384,8 @@ class AgentFlowController(private val settings: AgentOperationSettings) {
                 fail("AI request limit reached (${norm.maxAiRequests}).")
             } else {
                 currentStep++
-                state = if (result.isEof) FlowState.COMPLETED else FlowState.EXECUTING
+                state = FlowState.EXECUTING
+                terminalStepPending = result.isEof
                 AgentFlowAction.WclReady(result.wclSource, result.displayText, result.isEof)
             }
 
@@ -427,7 +430,8 @@ class AgentFlowController(private val settings: AgentOperationSettings) {
 
         return if (wcl != null) {
             currentStep = 1
-            state = if (isEof) FlowState.COMPLETED else FlowState.EXECUTING
+            state = FlowState.EXECUTING
+            terminalStepPending = isEof
             AgentFlowAction.WclReady(wcl, displayText = null, isEof = isEof)
         } else {
             if (aiRequestCount >= norm.maxAiRequests) {
@@ -558,12 +562,17 @@ class AgentFlowController(private val settings: AgentOperationSettings) {
     fun onPostEditObservation(observation: String): AgentFlowAction {
         if (state != FlowState.AWAITING_POST_EDIT_OBSERVATION) return AgentFlowAction.Noop
         if (observation.isBlank()) return fail("Post-edit observation returned no data; no repair command may be proposed.")
-        if (aiRequestCount >= norm.maxAiRequests) {
-            return fail("AI request limit reached (${norm.maxAiRequests}).")
-        }
         val completedContext = pendingPostEditContext ?: return fail("Post-edit checkpoint is missing its completed batch.")
         pendingPostEditContext = null
         serverStepCount++
+        if (terminalStepPending) {
+            terminalStepPending = false
+            state = FlowState.COMPLETED
+            return AgentFlowAction.FlowEnded(null)
+        }
+        if (aiRequestCount >= norm.maxAiRequests) {
+            return fail("AI request limit reached (${norm.maxAiRequests}).")
+        }
         aiRequestCount++
         state = FlowState.AWAITING_AGENT
         return AgentFlowAction.RequestContinuation(
