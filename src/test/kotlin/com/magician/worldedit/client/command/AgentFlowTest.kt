@@ -200,7 +200,63 @@ reason: Need to clear area first
     }
 
     @Test
+    fun `completed edit requests a fresh post-edit observation before continuation`() {
+        val controller = AgentFlowController(AgentOperationSettings())
+        controller.start()
+        assertIs<AgentFlowAction.WclReady>(
+            controller.onAgentResponse("```wcl\nsetblock ~ ~ ~ stone\n```")
+        )
+        controller.markStepDispatched(nowMillis = 0, commands = listOf("setblock 0 64 0 stone"))
+        controller.onServerGameMessage("Block placed.", nowMillis = 1)
+
+        val checkpoint = assertIs<AgentFlowAction.RequestPostEditObservation>(
+            controller.completeStepIfReady(nowMillis = 501)
+        )
+
+        assertTrue(checkpoint.completedStepContext.contains("setblock 0 64 0 stone"))
+        assertTrue(checkpoint.completedStepContext.contains("Block placed."))
+        assertIs<AgentFlowAction.Noop>(controller.onAgentResponse("```wcl\nsetblock ~1 ~ ~ stone\n```"))
+    }
+
+    @Test
+    fun `post-edit observation unlocks the next agent continuation`() {
+        val controller = AgentFlowController(AgentOperationSettings())
+        controller.start()
+        assertIs<AgentFlowAction.WclReady>(
+            controller.onAgentResponse("```wcl\nsetblock ~ ~ ~ stone\n```")
+        )
+        controller.markStepDispatched(nowMillis = 0, commands = listOf("setblock 0 64 0 stone"))
+
+        assertIs<AgentFlowAction.RequestPostEditObservation>(controller.completeStepIfReady(nowMillis = 8_000))
+        val continuation = assertIs<AgentFlowAction.RequestContinuation>(
+            controller.onPostEditObservation("=== WEMC INSPECT REGION ===\nblocks: scanned=1\n=== END WEMC INSPECT REGION ===")
+        )
+
+        assertTrue(continuation.context.contains("POST-EDIT OBSERVATION"))
+        assertTrue(continuation.context.contains("scanned=1"))
+        assertTrue(continuation.canRequestObservation)
+        assertIs<AgentFlowAction.WclReady>(
+            controller.onAgentResponse("```wcl\nsetblock ~1 ~ ~ stone\n```")
+        )
+    }
+
+    @Test
+    fun `post-edit observation failure can be reported without unlocking a repair`() {
+        val controller = AgentFlowController(AgentOperationSettings())
+        controller.start()
+        assertIs<AgentFlowAction.WclReady>(
+            controller.onAgentResponse("```wcl\nsetblock ~ ~ ~ stone\n```")
+        )
+        controller.markStepDispatched(nowMillis = 0)
+        assertIs<AgentFlowAction.RequestPostEditObservation>(controller.completeStepIfReady(nowMillis = 8_000))
+
+        assertIs<AgentFlowAction.Failed>(controller.onPostEditObservation(""))
+        assertIs<AgentFlowAction.Noop>(controller.onAgentResponse("```wcl\nsetblock ~1 ~ ~ stone\n```"))
+    }
+
+    @Test
     fun `FIRST_STEP_ONLY enables thinking for only the initial request`() {
+
         val controller = AgentFlowController(
             AgentOperationSettings(extendedThinking = ExtendedThinkingMode.FIRST_STEP_ONLY),
         )
@@ -219,7 +275,8 @@ reason: Need to clear area first
         continuation.onAgentResponse("```wcl\nsetblock ~ ~ ~ stone\n```")
         continuation.markStepDispatched(nowMillis = 0)
         continuation.onServerGameMessage("Block placed.", nowMillis = 1)
-        assertIs<AgentFlowAction.RequestContinuation>(continuation.completeStepIfReady(nowMillis = 501))
+        val checkpoint = assertIs<AgentFlowAction.RequestPostEditObservation>(continuation.completeStepIfReady(nowMillis = 501))
+        assertIs<AgentFlowAction.RequestContinuation>(continuation.onPostEditObservation(checkpoint.completedStepContext))
         assertEquals(ExtendedThinkingMode.OFF, continuation.thinkingModeForStep())
 
         val approvedPlan = AgentFlowController(
@@ -254,7 +311,8 @@ reason: Need to clear area first
         controller.markStepDispatched(nowMillis = 0)
 
         assertIs<AgentFlowAction.Noop>(controller.completeStepIfReady(nowMillis = 2_999))
-        val continuation = assertIs<AgentFlowAction.RequestContinuation>(controller.completeStepIfReady(nowMillis = 3_000))
+        val checkpoint = assertIs<AgentFlowAction.RequestPostEditObservation>(controller.completeStepIfReady(nowMillis = 3_000))
+        val continuation = assertIs<AgentFlowAction.RequestContinuation>(controller.onPostEditObservation(checkpoint.completedStepContext))
         assertTrue(continuation.context.contains("no game message observed"))
     }
 
@@ -315,7 +373,8 @@ reason: Need to clear area first
         assertIs<AgentFlowAction.WclReady>(controller.onAgentResponse("```wcl\nsetblock ~ ~ ~ stone\n```"))
         controller.markStepDispatched(0)
         controller.onServerGameMessage("Block placed.", 1)
-        assertIs<AgentFlowAction.RequestContinuation>(controller.completeStepIfReady(501))
+        val checkpoint = assertIs<AgentFlowAction.RequestPostEditObservation>(controller.completeStepIfReady(501))
+        assertIs<AgentFlowAction.RequestContinuation>(controller.onPostEditObservation(checkpoint.completedStepContext))
 
         val action = controller.onAgentResponse("```wcl\nsetblock ~1 ~ ~ stone\n```")
 
@@ -347,9 +406,8 @@ reason: Need to clear area first
         assertIs<AgentFlowAction.WclReady>(controller.onAgentResponse("```wcl\nsetblock ~ ~ ~ minecraft:stone\n```"))
         controller.markStepDispatched(0)
 
-        val action = controller.completeStepIfReady(3_000)
-
-        val continuation = assertIs<AgentFlowAction.RequestContinuation>(action)
+        val checkpoint = assertIs<AgentFlowAction.RequestPostEditObservation>(controller.completeStepIfReady(3_000))
+        val continuation = assertIs<AgentFlowAction.RequestContinuation>(controller.onPostEditObservation(checkpoint.completedStepContext))
         assertTrue(continuation.context.contains("no game message observed"))
     }
 
@@ -361,7 +419,8 @@ reason: Need to clear area first
         assertIs<AgentFlowAction.WclReady>(controller.onAgentResponse("```wcl\nsetblock ~ ~ ~ minecraft:stone\n```"))
         controller.markStepDispatched(0)
         controller.onServerGameMessage("Block placed.", 1)
-        assertIs<AgentFlowAction.RequestContinuation>(controller.completeStepIfReady(501))
+        val checkpoint = assertIs<AgentFlowAction.RequestPostEditObservation>(controller.completeStepIfReady(501))
+        assertIs<AgentFlowAction.RequestContinuation>(controller.onPostEditObservation(checkpoint.completedStepContext))
 
         assertEquals(ExtendedThinkingMode.OFF, controller.thinkingModeForStep())
     }

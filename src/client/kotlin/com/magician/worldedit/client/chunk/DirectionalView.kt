@@ -299,6 +299,13 @@ object LiveDirectionalViewInspection {
             future.completeExceptionally(IllegalStateException("No active world or player is loaded."))
             return future
         }
+        val currentDimensionKey = WorldDimensionKey.from(clientLevel)
+        if (request.scope.dimensionKey != currentDimensionKey) {
+            future.completeExceptionally(
+                IllegalStateException("Directional view scope belongs to ${request.scope.dimensionKey}, but the player is in $currentDimensionKey."),
+            )
+            return future
+        }
         val anchor = DirectionalViewAnchor(
             position = BlockPosition(player.blockPosition().x, player.blockPosition().y, player.blockPosition().z),
             direction = ViewDirection.fromMinecraft(player.direction),

@@ -3,6 +3,7 @@ package com.magician.worldedit.client.config
 import com.magician.worldedit.client.chunk.AgentRegionScopePrompt
 import com.magician.worldedit.client.chunk.ChunkPos
 import com.magician.worldedit.client.chunk.ChunkSelectionState
+import com.magician.worldedit.client.chunk.WorldDimensionKey
 import net.minecraft.client.Minecraft
 
 /**
@@ -77,16 +78,12 @@ object PlayerStateShortEncoder {
     }
 
     /**
-     * Inspect the dimension via the well-known LevelReader key. We pull the
-     * ResourceKey path string and abbreviate it. Falls back to "over" when
-     * the level cannot be resolved.
+     * Inspects the canonical dimension identifier and abbreviates it. Falls
+     * back to "over" when the level cannot be resolved.
      */
     private fun dimensionAbbrev(player: net.minecraft.world.entity.player.Player): String {
         val level = player.level()
-        // ResourceKey<Level> does not expose a getter named `location()` in
-        // the obfuscated 1.21.11 mappings; fall back to the toString form
-        // and parse the dimension id out of it.
-        val key = level.dimension().toString()
+        val key = WorldDimensionKey.from(level)
         return when {
             key.contains("overworld") -> "over"
             key.contains("nether") -> "nether"

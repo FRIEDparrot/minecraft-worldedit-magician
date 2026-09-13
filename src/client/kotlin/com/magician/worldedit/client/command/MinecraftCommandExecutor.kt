@@ -1,11 +1,13 @@
 package com.magician.worldedit.client.command
 
 import com.magician.worldedit.client.chunk.ChunkSelectionState
+import com.magician.worldedit.client.chunk.AgentRegionScope
 import com.magician.worldedit.client.config.ApprovalMode
 import com.magician.worldedit.client.command.wcl.WclPipeline
 import com.magician.worldedit.client.command.wcl.WclResult
 import net.minecraft.client.Minecraft
 import net.minecraft.world.phys.Vec3
+import kotlin.math.floor
 
 /** Records the WCL source and compiled MC commands for a single WCL execution. */
 data class WclHistoryEntry(
@@ -65,8 +67,20 @@ object MinecraftCommandExecutor {
      * Compiles WCL and records the source plus its concrete Minecraft command list.
      * The caller chooses the execution/approval policy for the compiled commands.
      */
-    fun compileWcl(wclSource: String, playerPos: Vec3): WclResult {
-        val result = WclPipeline.run(wclSource, playerPos.x.toInt(), playerPos.y.toInt(), playerPos.z.toInt())
+    fun compileWcl(
+        wclSource: String,
+        playerPos: Vec3,
+        scope: AgentRegionScope? = null,
+        enforceScope: Boolean = false,
+    ): WclResult {
+        val result = WclPipeline.run(
+            source = wclSource,
+            playerX = floor(playerPos.x).toInt(),
+            playerY = floor(playerPos.y).toInt(),
+            playerZ = floor(playerPos.z).toInt(),
+            scope = scope,
+            enforceScope = enforceScope,
+        )
         if (result is WclResult.Ok) {
             wclHistory.add(WclHistoryEntry(wclSource, result.commands))
         }

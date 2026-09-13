@@ -295,6 +295,8 @@ sealed interface AgentFlowAction {
     data class WclReady(val wclSource: String, val displayText: String?, val isEof: Boolean) : AgentFlowAction
     /** Tool request received; caller must execute it and feed the bounded result back. */
     data class ToolReady(val name: String, val argumentsJson: String, val displayText: String?) : AgentFlowAction
+    /** A command batch completed and must be observed before the agent can propose a repair. */
+    data class RequestPostEditObservation(val completedStepContext: String) : AgentFlowAction
     /** WCL compilation failed; error report is sent back to the agent for correction. */
     data class WclCompilationFailed(val errorReport: String) : AgentFlowAction
 
@@ -311,16 +313,25 @@ sealed interface AgentFlowAction {
  * State transitions:
  *   IDLE → (start) → AWAITING_AGENT
  *   AWAITING_AGENT → (plan-only) → AWAITING_PLAN_APPROVAL
- *   AWAITING_AGENT → (commands) → EXECUTING (execute, monitor, then feed back)
+ *   AWAITING_AGENT → (commands) → EXECUTING (execute, monitor, then verify)
  *   AWAITING_AGENT → (plain text) → COMPLETED (display and end)
  *   AWAITING_PLAN_APPROVAL → (approve) → AWAITING_AGENT (planApproved=true, continuation prompt)
  *   AWAITING_PLAN_APPROVAL → (reject) → COMPLETED (silently)
  *   EXECUTING → (has eof) → COMPLETED
- *   EXECUTING → (no eof) → AWAITING_AGENT (feed server responses, ask for next step)
+ *   EXECUTING → (batch complete) → AWAITING_POST_EDIT_OBSERVATION
+ *   AWAITING_POST_EDIT_OBSERVATION → (fresh read) → AWAITING_AGENT
  */
 class AgentFlowController(private val settings: AgentOperationSettings) {
 
-    enum class FlowState { IDLE, AWAITING_AGENT, AWAITING_PLAN_APPROVAL, EXECUTING, COMPLETED, FAILED }
+    enum class FlowState {
+        IDLE,
+        AWAITING_AGENT,
+        AWAITING_PLAN_APPROVAL,
+        EXECUTING,
+        AWAITING_POST_EDIT_OBSERVATION,
+        COMPLETED,
+        FAILED,
+    }
 
     private val norm = settings.normalized()
     private var state = FlowState.IDLE
@@ -329,6 +340,8 @@ class AgentFlowController(private val settings: AgentOperationSettings) {
     private var totalSteps = 1
     private var aiRequestCount = 0
     private var serverStepCount = 0
+    private var dispatchedCommands: List<String> = emptyList()
+    private var pendingPostEditContext: String? = null
     /** First WCL program bundled with a plan, held until approval. */
     private var pendingPlanWcl: String? = null
     private var pendingPlanIsEof = false
@@ -350,6 +363,8 @@ class AgentFlowController(private val settings: AgentOperationSettings) {
         pendingPlanWcl = null
         pendingPlanIsEof = false
         pendingResponse = mutableListOf()
+        dispatchedCommands = emptyList()
+        pendingPostEditContext = null
         return AgentFlowAction.Noop
     }
 
@@ -472,14 +487,13 @@ class AgentFlowController(private val settings: AgentOperationSettings) {
             return fail("AI request limit reached (${norm.maxAiRequests}).")
         }
 
-        val context = buildServerContext()
-        serverStepCount++
-        aiRequestCount++
-        state = FlowState.AWAITING_AGENT
+        // Reserve the continuation only after a fresh bounded read confirms the batch.
+        pendingPostEditContext = buildCompletedStepContext()
+        state = FlowState.AWAITING_POST_EDIT_OBSERVATION
         queryDeadlineMillis = null
         quietDeadlineMillis = null
 
-        return AgentFlowAction.RequestContinuation(context)
+        return AgentFlowAction.RequestPostEditObservation(requireNotNull(pendingPostEditContext))
     }
 
     fun timeoutIfDue(nowMillis: Long = System.currentTimeMillis()): AgentFlowAction {
@@ -487,8 +501,12 @@ class AgentFlowController(private val settings: AgentOperationSettings) {
     }
 
     /** Called by the caller after ExecuteCommands — sets up the monitor timer. */
-    fun markStepDispatched(nowMillis: Long = System.currentTimeMillis()): AgentFlowAction {
+    fun markStepDispatched(
+        nowMillis: Long = System.currentTimeMillis(),
+        commands: List<String> = emptyList(),
+    ): AgentFlowAction {
         if (state != FlowState.EXECUTING) return AgentFlowAction.Noop
+        dispatchedCommands = commands.map(String::trim).filter(String::isNotEmpty).take(MAX_RECORDED_COMMANDS)
         val multiplier = thinkingMultiplier()
         queryDeadlineMillis = nowMillis + (norm.queryTimeoutSeconds * multiplier) * 1000L
         quietDeadlineMillis = nowMillis + RESPONSE_QUIET_MILLIS
@@ -508,8 +526,14 @@ class AgentFlowController(private val settings: AgentOperationSettings) {
         else -> norm.extendedThinking
     }
 
-    private fun buildServerContext(): String = buildString {
+    private fun buildCompletedStepContext(): String = buildString {
         appendLine("=== completed step $currentStep ===")
+        appendLine("commands:")
+        if (dispatchedCommands.isEmpty()) {
+            appendLine("  (command list unavailable)")
+        } else {
+            dispatchedCommands.forEach { appendLine("  - $it") }
+        }
         if (pendingResponse.isEmpty()) {
             appendLine("server_responses: (no game message observed before timeout)")
         } else {
@@ -530,10 +554,36 @@ class AgentFlowController(private val settings: AgentOperationSettings) {
         return AgentFlowAction.WclCompilationFailed(errorMsg)
     }
 
-    /**
-     * Completes a read-only tool call and reserves the next bounded AI request.
-     * Tool execution itself is owned by the client/world adapter, not this state machine.
-     */
+    /** Completes the post-edit checkpoint after a fresh bounded context read. */
+    fun onPostEditObservation(observation: String): AgentFlowAction {
+        if (state != FlowState.AWAITING_POST_EDIT_OBSERVATION) return AgentFlowAction.Noop
+        if (observation.isBlank()) return fail("Post-edit observation returned no data; no repair command may be proposed.")
+        if (aiRequestCount >= norm.maxAiRequests) {
+            return fail("AI request limit reached (${norm.maxAiRequests}).")
+        }
+        val completedContext = pendingPostEditContext ?: return fail("Post-edit checkpoint is missing its completed batch.")
+        pendingPostEditContext = null
+        serverStepCount++
+        aiRequestCount++
+        state = FlowState.AWAITING_AGENT
+        return AgentFlowAction.RequestContinuation(
+            context = buildString {
+                appendLine(completedContext)
+                appendLine("=== POST-EDIT OBSERVATION ===")
+                appendLine(observation.trim())
+                append("=== END POST-EDIT OBSERVATION ===")
+            },
+            canRequestObservation = true,
+        )
+    }
+
+    /** Stops the flow when the mandatory verification read cannot be completed. */
+    fun onPostEditObservationFailure(message: String): AgentFlowAction {
+        if (state != FlowState.AWAITING_POST_EDIT_OBSERVATION) return AgentFlowAction.Noop
+        return fail("Post-edit observation failed: ${message.ifBlank { "unknown error" }}")
+    }
+
+    /** Completes a read-only tool call and reserves the next bounded AI request. */
     fun onToolResult(context: String): AgentFlowAction {
         if (state != FlowState.AWAITING_AGENT) return AgentFlowAction.Noop
         if (aiRequestCount >= norm.maxAiRequests) {
@@ -550,5 +600,6 @@ class AgentFlowController(private val settings: AgentOperationSettings) {
 
     companion object {
         private const val RESPONSE_QUIET_MILLIS = 500L
+        private const val MAX_RECORDED_COMMANDS = 64
     }
 }

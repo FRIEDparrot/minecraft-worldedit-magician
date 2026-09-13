@@ -113,7 +113,7 @@ object AgentStepPlanningPrompt {
             appendLine("  ```")
             appendLine()
             appendLine("After the wcl program, add <eof> on its own line if the task is finished after this batch.")
-            appendLine("Omit <eof> if more steps follow — WEMC will send server responses and you respond with the next wemc code batch.")
+            appendLine("Omit <eof> if more steps follow — WEMC will monitor the server, take a fresh bounded post-edit observation, and then send the completed batch plus observation before you propose a repair or next batch.")
             appendLine()
             appendLine("Read-only world observation tool:")
             appendLine("- When you need block context before building, request inspect_region with exactly one JSON tool block:")

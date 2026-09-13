@@ -32,12 +32,26 @@ This roadmap intentionally keeps each milestone small enough to compile, test, a
 - Return deterministic per-lateral lanes, Y rows, palette symbols, and explicit unknown/unloaded/out-of-scope counts.
 - Execute on the correct game thread and feed the result through the existing FLOW continuation budget.
 
-## Next working day — post-edit verification boundary
+## Completed today — post-edit verification boundary
 
-- Add a post-edit observation checkpoint that records the completed batch and its bounded observation.
-- Require a fresh observation before repair commands can be proposed.
-- Connect command coordinate validation to the confirmed operate Y/chunk bounds before enabling larger autonomous builds.
-- Keep screenshots as a separate opt-in path after the textual observation contract is stable.
+- Record the dispatched command batch together with bounded server feedback before requesting another AI step.
+- Require a fresh `inspect_region` read of the captured operate/context scope before the agent can propose a repair or next non-terminal batch.
+- Reject stale or missing scope and failed verification reads instead of unlocking an unverified repair.
+- Keep the change UI-free: verification is automatic and does not add a player decision.
+
+## Completed today — WCL write-boundary validation
+
+- Resolve integer and relative `~` coordinates against the sender's floored block position.
+- Reject known `setblock`, `fill`, `clone`, block-NBT, block-item, and `summon` operations outside the captured operate region before server dispatch.
+- Permit clone sources only inside the read-only context region, while requiring the destination cuboid to remain writable.
+- Reject scoped writes when FLOW starts without a confirmed selection, and reject position-changing `execute` wrappers that cannot be proven safe.
+- Keep the change UI-free: the existing WCL compilation error path tells the agent how to correct its next batch.
+
+## Next working day — terminal verification and retry resilience
+
+- Decide whether terminal `<eof>` batches should also run the same verification before ending the flow, while preserving the one-request budget contract.
+- Add a bounded retry policy for transient observation failures rather than ending the flow immediately.
+- Exercise the checkpoint and write-boundary rejection in a running integrated-server client and verify the exact chat/status presentation.
 
 ## Later — build verification loop
 

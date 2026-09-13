@@ -288,6 +288,13 @@ object LiveRegionInspection {
             future.completeExceptionally(IllegalStateException("No active world is loaded."))
             return future
         }
+        val currentDimensionKey = WorldDimensionKey.from(clientLevel)
+        if (request.scope.dimensionKey != currentDimensionKey) {
+            future.completeExceptionally(
+                IllegalStateException("Inspection scope belongs to ${request.scope.dimensionKey}, but the player is in $currentDimensionKey."),
+            )
+            return future
+        }
 
         val server = minecraft.singleplayerServer
         if (server != null) {
