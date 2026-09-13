@@ -34,6 +34,9 @@ object ChunkSelectionState {
     /** Configuration for the Y-range and block limits. */
     var config: ChunkSelectionConfig = ChunkSelectionConfig()
 
+    /** Dimension key captured when the current confirmed selection or draft began. */
+    private var selectionDimensionKey: String? = null
+
     /** Runtime-configurable safety limits persisted with agent operation settings. */
     private var maxOperateChunks: Int = ContextRegion.MAX_OPERATE_CHUNKS
     private var maxContextChunks: Int = ContextRegion.MAX_CONTEXT_CHUNKS
@@ -46,6 +49,7 @@ object ChunkSelectionState {
     fun reset() {
         selectedChunks.clear()
         cancelPendingSelection()
+        selectionDimensionKey = null
         selectionMode = SINGLE
         operationMode = SelectionOperationMode.REPLACE
         config = ChunkSelectionConfig()
@@ -58,6 +62,7 @@ object ChunkSelectionState {
     fun clearSelection() {
         selectedChunks.clear()
         cancelPendingSelection()
+        selectionDimensionKey = null
     }
 
     /** Returns the number of currently selected chunks. */
@@ -65,6 +70,22 @@ object ChunkSelectionState {
 
     /** Returns the total estimated block count across all selected chunks. */
     fun estimatedBlockCount(): Long = config.estimatedBlockCount(selectedChunkCount())
+
+    /** Returns the dimension key captured for the current selection or draft. */
+    fun selectionDimensionKeyOrNull(): String? = selectionDimensionKey
+
+    /**
+     * Clears both confirmed and pending selection state when the client moves to
+     * a different dimension or leaves the world. The Y range is reinitialized
+     * on the next selection because world height limits may differ by dimension.
+     */
+    fun clearIfDimensionChanged(currentDimensionKey: String?): Boolean {
+        val selectedDimensionKey = selectionDimensionKey ?: return false
+        if (selectedDimensionKey == currentDimensionKey) return false
+        clearSelection()
+        hasConfiguredYRange = false
+        return true
+    }
 
     /**
      * Returns the bounding box that contains all selected chunks.
@@ -101,12 +122,20 @@ object ChunkSelectionState {
      */
     fun agentRegionScopeOrNull(): AgentRegionScope? {
         if (selectedChunks.isEmpty() || selectedChunks.size > maxOperateChunks) return null
+        val dimensionKey = selectionDimensionKey ?: return null
         val operate = confirmedOperateRegionOrNull() ?: return null
-        return runCatching { AgentRegionScope.defaultFor(operate, maxContextChunks) }
+        return runCatching {
+            AgentRegionScope.defaultFor(
+                operate = operate,
+                maxContextChunks = maxContextChunks,
+                dimensionKey = dimensionKey,
+            )
+        }
             .getOrElse {
                 AgentRegionScope.create(
-                    operate,
-                    ContextRegion(operate.chunks, operate.minY, operate.maxY),
+                    operate = operate,
+                    context = ContextRegion(operate.chunks, operate.minY, operate.maxY),
+                    dimensionKey = dimensionKey,
                 )
             }
     }
@@ -197,7 +226,13 @@ object ChunkSelectionState {
      * Targets a chunk with the selection torch. This only prepares a draft;
      * [confirmPendingSelection] is the sole operation that changes [selectedChunks].
      */
-    fun stageChunkSelection(chunk: ChunkPos): ChunkSelectionStageResult {
+    fun stageChunkSelection(
+        chunk: ChunkPos,
+        dimensionKey: String = UNSPECIFIED_DIMENSION_KEY,
+    ): ChunkSelectionStageResult {
+        require(dimensionKey.isNotBlank()) { "Selection dimension key must not be blank." }
+        clearIfDimensionChanged(dimensionKey)
+        selectionDimensionKey = dimensionKey
         return when (selectionMode) {
             SINGLE -> {
                 pendingFirstCorner = null
@@ -247,6 +282,7 @@ object ChunkSelectionState {
         val selection = pendingSelection ?: return null
         applyToSelection(selection.chunks, selection.operation)
         pendingSelection = null
+        if (selectedChunks.isEmpty()) selectionDimensionKey = null
         return selection
     }
 
@@ -256,6 +292,7 @@ object ChunkSelectionState {
         pendingSelection = null
         pendingFirstCorner = null
         pendingSecondCorner = null
+        if (selectedChunks.isEmpty()) selectionDimensionKey = null
         return hadPendingSelection
     }
 
@@ -264,6 +301,7 @@ object ChunkSelectionState {
         val hadSelection = selectedChunks.isNotEmpty() || pendingSelection != null || pendingFirstCorner != null
         selectedChunks.clear()
         cancelPendingSelection()
+        selectionDimensionKey = null
         return hadSelection
     }
 
@@ -295,4 +333,5 @@ object ChunkSelectionState {
     fun awaitingSecondCorner(): Boolean = selectionMode == CORNER && pendingFirstCorner != null && pendingSelection != null
 
     private const val DEFAULT_Y_HEIGHT = 20
+    private const val UNSPECIFIED_DIMENSION_KEY = "unspecified"
 }

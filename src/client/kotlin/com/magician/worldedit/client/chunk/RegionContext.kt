@@ -37,19 +37,45 @@ class OperateRegion(
 class AgentRegionScope private constructor(
     val operate: OperateRegion,
     val context: ContextRegion,
+    /** Stable Minecraft dimension key captured when the region was selected. */
+    val dimensionKey: String,
 ) {
+    init {
+        require(dimensionKey.isNotBlank()) { "Region scope dimension key must not be blank." }
+    }
+
+    /**
+     * True when this scope describes the exact same dimension, writable region,
+     * and read-only context as [other].
+     */
+    fun hasSameBoundaryAs(other: AgentRegionScope): Boolean =
+        dimensionKey == other.dimensionKey &&
+            operate.chunks == other.operate.chunks &&
+            operate.minY == other.operate.minY &&
+            operate.maxY == other.operate.maxY &&
+            context.chunks == other.context.chunks &&
+            context.minY == other.context.minY &&
+            context.maxY == other.context.maxY
+
     companion object {
         /** Creates a scope only when the read context fully encloses the write area. */
-        fun create(operate: OperateRegion, context: ContextRegion): AgentRegionScope {
+        fun create(
+            operate: OperateRegion,
+            context: ContextRegion,
+            dimensionKey: String = UNSPECIFIED_DIMENSION_KEY,
+        ): AgentRegionScope {
             require(context.contains(operate)) { "Context region must contain the complete operate region." }
-            return AgentRegionScope(operate, context)
+            return AgentRegionScope(operate, context, dimensionKey)
         }
 
         /** Creates the standard one-chunk/five-block read margin for an operation. */
         fun defaultFor(
             operate: OperateRegion,
             maxContextChunks: Int = ContextRegion.MAX_CONTEXT_CHUNKS,
-        ): AgentRegionScope = create(operate, operate.defaultContext(maxContextChunks))
+            dimensionKey: String = UNSPECIFIED_DIMENSION_KEY,
+        ): AgentRegionScope = create(operate, operate.defaultContext(maxContextChunks), dimensionKey)
+
+        private const val UNSPECIFIED_DIMENSION_KEY = "unspecified"
     }
 }
 

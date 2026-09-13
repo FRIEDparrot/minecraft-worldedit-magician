@@ -4,6 +4,7 @@ import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertFalse
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
@@ -50,6 +51,27 @@ class RegionContextTest {
         assertTrue(context.contains(operate))
         assertEquals(-65, context.minY)
         assertEquals(323, context.maxY)
+    }
+
+    @Test
+    fun `confirmed selection carries its dimension into the agent scope`() {
+        val dimensionKey = "minecraft:the_end"
+        ChunkSelectionState.stageChunkSelection(ChunkPos(2, -3), dimensionKey)
+        ChunkSelectionState.confirmPendingSelection()
+
+        val scope = requireNotNull(ChunkSelectionState.agentRegionScopeOrNull())
+
+        assertEquals(dimensionKey, scope.dimensionKey)
+    }
+
+    @Test
+    fun `scope comparison rejects identical coordinates from a different dimension`() {
+        val operate = OperateRegion(setOf(ChunkPos(0, 0)), minY = 64, maxY = 70)
+        val context = ContextRegion(setOf(ChunkPos(0, 0)), minY = 59, maxY = 75)
+        val overworld = AgentRegionScope.create(operate, context, "minecraft:overworld")
+        val nether = AgentRegionScope.create(operate, context, "minecraft:the_nether")
+
+        assertFalse(overworld.hasSameBoundaryAs(nether))
     }
 
     @Test
@@ -121,7 +143,8 @@ class RegionContextTest {
     @Test
     fun `context cap falls back to an operate-only context when neighborhood is too large`() {
         ChunkSelectionState.configureRegionLimits(maxOperateChunks = 1, maxContextChunks = 8)
-        ChunkSelectionState.selectedChunks.add(ChunkPos(0, 0))
+        ChunkSelectionState.stageChunkSelection(ChunkPos(0, 0), "minecraft:overworld")
+        ChunkSelectionState.confirmPendingSelection()
 
         assertTrue(ChunkSelectionState.confirmedOperateRegionOrNull() != null)
         val scope = requireNotNull(ChunkSelectionState.agentRegionScopeOrNull())
