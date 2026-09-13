@@ -99,6 +99,7 @@ The important functions, interfaces and core classes that have relatively packag
 - Every fatal `AgentFlowAction.Failed` path must transition the controller to `FAILED`; returning a failure action without changing state allows stale callers to submit another response.
 - Mode-specific agent instructions must be included on the actual provider request path; instructions used only by the SINGLE chat session do not affect standalone FLOW requests.
 - Chunk coordinates alone are not a complete world-selection identity. Capture the client dimension when staging a selection, carry it in the agent scope and equality checks, and clear dimension-bound state before any read or write can continue after a dimension change.
+- In Minecraft 1.21.11's target mappings, `ResourceKey` exposes its canonical location as `identifier()`, not `location()`. Use `identifier().toString()` for stable dimension IDs; `ResourceKey.toString()` is diagnostic text and must not be persisted, compared, or shown to agents.
 
 
 ## Creations 

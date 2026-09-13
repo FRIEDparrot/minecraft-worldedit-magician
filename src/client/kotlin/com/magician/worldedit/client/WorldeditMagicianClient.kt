@@ -15,6 +15,7 @@ import com.magician.worldedit.client.chunk.LiveRegionInspection
 import com.magician.worldedit.client.chunk.RegionInspectionRequest
 import com.magician.worldedit.client.chunk.RegionInspectionTool
 import com.magician.worldedit.client.chunk.SelectionOperationMode
+import com.magician.worldedit.client.chunk.WorldDimensionKey
 import com.magician.worldedit.client.command.AgentFlowAction
 import com.magician.worldedit.client.command.AgentFlowController
 import com.magician.worldedit.client.command.AgentOperationMode
@@ -147,7 +148,7 @@ object WorldeditMagicianClient : ClientModInitializer {
         }
 
         ClientTickEvents.END_CLIENT_TICK.register {
-            clearSelectionForDimension(Minecraft.getInstance().level?.dimension()?.toString())
+            clearSelectionForDimension(Minecraft.getInstance().level?.let { WorldDimensionKey.from(it) })
         }
 
         ClientTickEvents.END_CLIENT_TICK.register {
@@ -168,9 +169,9 @@ object WorldeditMagicianClient : ClientModInitializer {
                 return@register InteractionResult.PASS
             }
 
-            if (clearSelectionForDimension(world.dimension().toString())) return@register InteractionResult.FAIL
+            if (clearSelectionForDimension(WorldDimensionKey.from(world))) return@register InteractionResult.FAIL
             ChunkSelectionState.initializeYRange(pos.y, world.minY, world.maxY - 1)
-            stageChunkSelection(ChunkPos(pos.x shr 4, pos.z shr 4), world.dimension().toString())
+            stageChunkSelection(ChunkPos(pos.x shr 4, pos.z shr 4), WorldDimensionKey.from(world))
             InteractionResult.FAIL
         }
 
@@ -179,7 +180,7 @@ object WorldeditMagicianClient : ClientModInitializer {
                 return@register InteractionResult.PASS
             }
 
-            if (clearSelectionForDimension(world.dimension().toString())) return@register InteractionResult.FAIL
+            if (clearSelectionForDimension(WorldDimensionKey.from(world))) return@register InteractionResult.FAIL
             if (ChunkSelectionState.confirmPendingSelection() != null) {
                 sendSelectionMessage("Selection confirmed: ${ChunkSelectionState.selectedChunkCount()} chunk(s).")
                 InteractionResult.FAIL
@@ -193,7 +194,7 @@ object WorldeditMagicianClient : ClientModInitializer {
                 return@register InteractionResult.PASS
             }
 
-            if (clearSelectionForDimension(world.dimension().toString())) return@register InteractionResult.FAIL
+            if (clearSelectionForDimension(WorldDimensionKey.from(world))) return@register InteractionResult.FAIL
             if (ChunkSelectionState.confirmPendingSelection() != null) {
                 sendSelectionMessage("Selection confirmed: ${ChunkSelectionState.selectedChunkCount()} chunk(s).")
                 InteractionResult.FAIL
@@ -1303,7 +1304,7 @@ object WorldeditMagicianClient : ClientModInitializer {
         }
 
         val level = player.level()
-        if (clearSelectionForDimension(level.dimension().toString())) return true
+        if (clearSelectionForDimension(WorldDimensionKey.from(level))) return true
         val shiftDown = isShiftDown()
         val altDown = isAltDown()
         return when {
