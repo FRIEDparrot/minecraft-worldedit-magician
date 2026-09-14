@@ -486,11 +486,8 @@ class AgentFlowController(private val settings: AgentOperationSettings) {
             return fail("Server step limit reached ($serverStepCount / ${norm.maxServerSteps}).")
         }
 
-        // Feed results back to agent
-        if (aiRequestCount >= norm.maxAiRequests) {
-            return fail("AI request limit reached (${norm.maxAiRequests}).")
-        }
-
+        // A post-edit observation is mandatory even at the provider request limit.
+        // It does not send a provider request; a non-terminal continuation is budget-checked after it.
         // Reserve the continuation only after a fresh bounded read confirms the batch.
         pendingPostEditContext = buildCompletedStepContext()
         state = FlowState.AWAITING_POST_EDIT_OBSERVATION

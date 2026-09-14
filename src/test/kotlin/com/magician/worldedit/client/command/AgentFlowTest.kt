@@ -209,6 +209,28 @@ setblock ~1 ~ ~ stone
     }
 
     @Test
+    fun `AI request limit waits for mandatory post-edit observation`() {
+        val terminal = AgentFlowController(AgentOperationSettings(maxAiRequests = 1))
+        terminal.start()
+        assertIs<AgentFlowAction.WclReady>(
+            terminal.onAgentResponse("```wcl\nsetblock ~ ~ ~ stone\n```\n<eof>"),
+        )
+        terminal.markStepDispatched(nowMillis = 0)
+        assertIs<AgentFlowAction.RequestPostEditObservation>(terminal.completeStepIfReady(nowMillis = 8_000))
+        assertIs<AgentFlowAction.FlowEnded>(terminal.onPostEditObservation("verified terminal edit"))
+
+        val nonTerminal = AgentFlowController(AgentOperationSettings(maxAiRequests = 1))
+        nonTerminal.start()
+        assertIs<AgentFlowAction.WclReady>(nonTerminal.onAgentResponse("```wcl\nsetblock ~ ~ ~ stone\n```"))
+        nonTerminal.markStepDispatched(nowMillis = 0)
+        assertIs<AgentFlowAction.RequestPostEditObservation>(nonTerminal.completeStepIfReady(nowMillis = 8_000))
+        val continuationLimit = assertIs<AgentFlowAction.Failed>(
+            nonTerminal.onPostEditObservation("verified non-terminal edit"),
+        )
+        assertTrue(continuationLimit.message.contains("AI request limit reached"))
+    }
+
+    @Test
     fun `one-step flow response does not require plan approval`() {
         val controller = AgentFlowController(AgentOperationSettings())
         controller.start()
@@ -474,9 +496,8 @@ setblock ~1 ~ ~ stone
         assertEquals(ExtendedThinkingMode.OFF, controller.thinkingModeForStep())
     }
 
-    // Note: AI request limit is checked only in AWAITING_AGENT state.
-    // Testing it requires simulating EXECUTING→AWAITING_AGENT transitions via
-    // completeStepIfReady() with server responses or timeouts — not practical in unit tests.
+    // A dispatched batch always receives its mandatory post-edit observation.
+    // The provider-request limit applies only if a non-terminal continuation is needed.
 
     @Test
     fun `SINGLE mode prompt mentions SINGLE and wemc`() {
