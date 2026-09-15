@@ -1,0 +1,44 @@
+# Progress — 2026-09-15
+
+## Phase 1: restoration and triage — complete
+- Loaded Minecraft Fabric, TDD, planning, safe-editing, GitHub PR, and independent-review workflows.
+- Restored git state and isolated an unrelated dirty drawing file.
+- Ran three read-only specialist audits: priority triage, FLOW audit, and OpenAI path audit.
+- Chose a small FLOW state-machine repair with direct safety impact as today’s implementation.
+
+## Phase 2: regression test — complete
+- Added one contract-level test for terminal and non-terminal batches at `maxAiRequests = 1`.
+- Confirmed RED: the focused test class ran 41 tests and only the new test failed at the expected pre-observation AI-limit decision.
+
+## Phase 3: minimal repair — complete
+- Removed the premature AI-request cap check from the post-dispatch completion path.
+- Kept the existing continuation-time cap check, so a non-terminal flow still cannot send another provider request after the limit.
+- Confirmed GREEN: the focused `AgentFlowTest` class passes.
+
+## Phase 4: verification and review — complete
+- `./gradlew test build --no-daemon` succeeded after the change.
+- Static added-line scan reported zero hardcoded credential, shell injection, eval/exec, unsafe-deserialization, and SQL-formatting matches.
+- Independent review returned PASS with no security concerns, logic errors, or suggestions.
+
+## Phase 5: delivery — blocked externally
+- Committed `535e3b7 fix(flow): observe batches before enforcing request cap` with only the two intended Kotlin files.
+- `git push -u origin HEAD` timed out waiting for GitHub authentication; public GitHub API confirmed the remote branch remained absent.
+- `gh` is not installed; no `GITHUB_TOKEN`/`GH_TOKEN` or token file was available, and a bounded noninteractive Git credential lookup also hung. Do not invent or request credentials in this unattended job.
+- A protected-file gate prevented the required `AGENTS.md` Mistake Log entry. The preventative rule is recorded in `findings.md` for manual transfer.
+
+## Verification log
+| Command | Result |
+|---|---|
+| `./gradlew --version` | Gradle 9.5.1 available; Java 26.0.1 active. |
+| `./gradlew test --tests 'com.magician.worldedit.client.command.AgentFlowTest' --no-daemon` | Expected RED: 41 tests, 1 failure (`AI request limit waits for mandatory post-edit observation`). |
+| `./gradlew test --tests 'com.magician.worldedit.client.command.AgentFlowTest' --no-daemon` | GREEN: build successful after the controller repair. |
+| `git diff --check && ./gradlew test build --no-daemon` | Passed; full test/build verified. |
+| Independent review | PASS; no blocking security or logic issue. |
+| `git push -u origin HEAD` | Blocked: timed out awaiting unavailable GitHub authentication; remote branch remained absent. |
+
+## Errors encountered
+| Error | Attempt | Resolution |
+|---|---:|---|
+| Initial `patch` insertion lost Kotlin class indentation in the new test block. | 1 | Replaced the zero-indented block with explicitly indented Kotlin; focused Gradle test then compiled and ran. |
+| Protected-file gate denied the required `AGENTS.md` Mistake Log update. | 1 | Did not bypass the gate; recorded the rule in `findings.md` and the final report. |
+| Git push waited for an unavailable interactive credential prompt. | 1 | Verified remote branch absence through public API; checked non-secret auth availability; stopped rather than retrying or fabricating authentication. |
