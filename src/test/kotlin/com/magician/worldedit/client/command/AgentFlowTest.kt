@@ -292,6 +292,29 @@ setblock ~1 ~ ~ stone
     }
 
     @Test
+    fun `transient post-edit inspection failure requests one retry without consuming a budget`() {
+        val controller = AgentFlowController(AgentOperationSettings(maxAiRequests = 1))
+        controller.start()
+        assertIs<AgentFlowAction.WclReady>(
+            controller.onAgentResponse("```wcl\nsetblock ~ ~ ~ stone\n```")
+        )
+        controller.markStepDispatched(nowMillis = 0, commands = listOf("setblock 0 64 0 stone"))
+        val checkpoint = assertIs<AgentFlowAction.RequestPostEditObservation>(
+            controller.completeStepIfReady(nowMillis = 8_000),
+        )
+
+        val retry = assertIs<AgentFlowAction.RetryPostEditObservation>(
+            controller.onPostEditObservationTransientFailure("temporary chunk read failure"),
+        )
+        assertEquals(1_000L, retry.retryAfterMillis)
+        assertEquals(checkpoint.completedStepContext, retry.completedStepContext)
+        assertIs<AgentFlowAction.Failed>(
+            controller.onPostEditObservationTransientFailure("temporary chunk read failure"),
+        )
+        assertIs<AgentFlowAction.Noop>(controller.onAgentResponse("```wcl\nsetblock ~1 ~ ~ stone\n```"))
+    }
+
+    @Test
     fun `post-edit observation failure can be reported without unlocking a repair`() {
         val controller = AgentFlowController(AgentOperationSettings())
         controller.start()

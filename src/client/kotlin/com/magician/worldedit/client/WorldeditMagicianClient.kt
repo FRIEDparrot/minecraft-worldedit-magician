@@ -55,6 +55,7 @@ import com.magician.worldedit.client.screen.WorldEditConfigurationScreen
 import com.mojang.brigadier.Command
 import com.mojang.brigadier.CommandDispatcher
 import java.util.concurrent.CompletableFuture
+import java.util.concurrent.TimeUnit
 import com.mojang.brigadier.arguments.StringArgumentType
 import com.mojang.brigadier.suggestion.Suggestion
 import com.mojang.brigadier.suggestion.Suggestions
@@ -823,6 +824,7 @@ object WorldeditMagicianClient : ClientModInitializer {
             AgentFlowAction.Noop -> Unit
             is AgentFlowAction.ToolReady -> executeFlowTool(flow, action)
             is AgentFlowAction.RequestPostEditObservation -> executeFlowPostEditObservation(flow, action)
+            is AgentFlowAction.RetryPostEditObservation -> scheduleFlowPostEditObservationRetry(flow, action)
             // WCL is the sole generated executable form: compile, validate compiled output, then dispatch.
             is AgentFlowAction.WclReady -> {
                 if (flow.scope != null && !isFlowScopeCurrent(flow)) {
@@ -870,6 +872,22 @@ object WorldeditMagicianClient : ClientModInitializer {
         }
     }
 
+    private fun scheduleFlowPostEditObservationRetry(
+        flow: ActiveFlow,
+        action: AgentFlowAction.RetryPostEditObservation,
+    ) {
+        sendMessage("[WEMC] Post-edit verification read failed; retrying once in ${action.retryAfterMillis / 1_000} second(s).")
+        CompletableFuture.delayedExecutor(action.retryAfterMillis, TimeUnit.MILLISECONDS).execute {
+            Minecraft.getInstance().execute {
+                if (activeFlow !== flow) return@execute
+                executeFlowPostEditObservation(
+                    flow,
+                    AgentFlowAction.RequestPostEditObservation(action.completedStepContext),
+                )
+            }
+        }
+    }
+
     private fun executeFlowPostEditObservation(flow: ActiveFlow, action: AgentFlowAction.RequestPostEditObservation) {
         val scope = flow.scope
         if (scope == null || !isFlowScopeCurrent(flow)) {
@@ -894,7 +912,7 @@ object WorldeditMagicianClient : ClientModInitializer {
                 if (error != null) {
                     handleFlowAction(
                         flow,
-                        flow.controller.onPostEditObservationFailure(error.message ?: "post-edit inspection failed"),
+                        flow.controller.onPostEditObservationTransientFailure(error.message ?: "post-edit inspection failed"),
                     )
                     return@execute
                 }
