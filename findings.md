@@ -12,6 +12,7 @@
 - GREEN: focused `RegionInspectionTest` passed after the minimal repair.
 - Full verification: `./gradlew test build --no-daemon` and `git diff --check` passed.
 - Independent review: PASS. The reviewer confirmed the shared predicate handles negative coordinates with `Math.floorDiv`, the excluded entity cannot reach the result/prompt, and omission accounting retains the previous cap semantics.
+- Delivery: PR #13 is open against `main` at `dea5d3b`, with remote build and Sourcery checks successful. Its scope transparently aggregates pre-existing pending FLOW reliability commits with this repair; a cron hardline blocked the nonessential force-push that would have rewritten it into a context-only PR.
 
 ## Previous findings
 

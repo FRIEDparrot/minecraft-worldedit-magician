@@ -15,8 +15,11 @@
 - `./gradlew test build --no-daemon` and `git diff --check` passed.
 - Independent reviewer returned PASS: no blocking logic, accounting, Kotlin, or boundary-safety issue.
 
-## Phase 4: delivery — in progress
-- Preparing the bounded source/test/planning change for commit, push, and PR verification.
+## Phase 4: delivery — complete
+- Pushed `dea5d3b` on `fix/flow-observation-retry` and opened PR #13 against `main`.
+- Read back PR #13: open, mergeable, and clean; GitHub Actions build and Sourcery review checks completed successfully.
+- The PR description states its intentional aggregation of prior pending FLOW reliability commits with this context-boundary repair.
+- A follow-up attempt to rewrite the already-pushed branch into a context-only PR was blocked by the cron force-push policy, so no remote history was rewritten. A local clean `fix/context-inspection-boundary` branch at `df086e6` preserves the two-file context-only commit if later separation is desired.
 
 ## Historical progress
 

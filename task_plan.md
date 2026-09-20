@@ -16,7 +16,7 @@ Ship one small, independently testable safety repair: the model-facing region-in
 2. [complete] Choose the smallest high-value vertical slice: harden `RegionInspectionSummarizer` rather than duplicate existing official OpenAI `/responses` support or redesign FLOW scope envelopes.
 3. [complete] Wrote the focused regression test first, observed its expected failure, then filtered and accounted for out-of-context entities.
 4. [complete] Focused/full Gradle verification and independent review passed with no blocking issue.
-5. [in_progress] Commit, push, create/update PR, and verify remote state.
+5. [complete] Committed/pushed `dea5d3b`, created PR #13 against `main`, updated its scope description, and read back its open/clean/mergeable remote state and successful checks.
 
 ## Sequencing after today
 - Tomorrow: decide and implement explicit UX for context expansion that cannot fit the configured cap; never silently represent an operate-only context as the documented default expansion.
