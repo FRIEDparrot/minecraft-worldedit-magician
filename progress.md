@@ -1,4 +1,25 @@
-# Progress — 2026-09-15
+# Progress — current daily development
+
+## Phase 1: restoration and triage — complete
+- Loaded planning, TDD, architecture, and PR workflows; read project guidance and prior planning artifacts.
+- Verified clean current branch `fix/flow-observation-retry` and commissioned two independent read-only audits.
+- Decided against duplicating existing OpenAI implementation. Chose a bounded region-inspection context safety repair.
+
+## Phase 2: test-first repair — complete
+- Added `summary excludes out of context block entities and reports them omitted` before production code.
+- Confirmed RED: the focused Gradle test failed because the result leaked `minecraft:barrel` from chunk -1.
+- Applied the minimal filter-before-sort/cap repair and included excluded records in omitted-entity accounting.
+- Confirmed GREEN: focused `RegionInspectionTest` passed.
+
+## Phase 3: verification/review — complete
+- `./gradlew test build --no-daemon` and `git diff --check` passed.
+- Independent reviewer returned PASS: no blocking logic, accounting, Kotlin, or boundary-safety issue.
+
+## Phase 4: delivery — in progress
+- Preparing the bounded source/test/planning change for commit, push, and PR verification.
+
+## Historical progress
+
 
 ## Phase 1: restoration and triage — complete
 - Loaded Minecraft Fabric, TDD, planning, safe-editing, GitHub PR, and independent-review workflows.

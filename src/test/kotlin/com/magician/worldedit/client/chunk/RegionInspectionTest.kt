@@ -100,6 +100,25 @@ class RegionInspectionTest {
         assertTrue(result.truncated)
     }
 
+    @Test
+    fun `summary excludes out of context block entities and reports them omitted`() {
+        val result = RegionInspectionSummarizer.summarize(
+            request = RegionInspectionRequest(scope, maxBlockEntities = 2),
+            loadedChunks = scope.context.chunks,
+            samples = emptyList(),
+            blockEntities = listOf(
+                RegionBlockEntitySample(BlockPosition(-1, 64, 0), "minecraft:barrel"),
+                RegionBlockEntitySample(BlockPosition(0, 64, 0), "minecraft:chest"),
+            ),
+        )
+
+        assertEquals(listOf("minecraft:chest"), result.blockEntities.map { it.typeId })
+        assertEquals(1, result.omittedBlockEntityCount)
+        assertTrue(result.truncated)
+        assertTrue(result.toPrompt().contains("minecraft:chest"))
+        assertTrue(!result.toPrompt().contains("minecraft:barrel"))
+    }
+
     private fun sample(x: Int, y: Int, z: Int, id: String, air: Boolean): RegionBlockSample =
         RegionBlockSample(BlockPosition(x, y, z), id, air)
 }

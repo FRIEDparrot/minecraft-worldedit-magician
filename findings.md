@@ -1,4 +1,20 @@
-# Findings — 2026-09-15 daily development
+# Findings — current daily development
+
+## Current triage
+- Verified current branch `fix/flow-observation-retry` has a clean working tree. Earlier plan/progress files refer to a different historical branch and must not determine this slice.
+- Official OpenAI API-key support is already implemented: `OpenAiSettingsStore` supplies the official base URL, and `HostedResponsesRequest` builds authenticated `POST /responses` requests. The remaining OpenAI gap is hermetic transport/decoder coverage, not another provider implementation.
+- The smallest direct safety issue is `RegionInspectionSummarizer.summarize`: block samples are filtered to `scope.context`, while `blockEntities` were merely sorted and capped. A direct caller could therefore expose out-of-context entity data to the model prompt.
+- Chosen repair: filter entities with the existing `BlockPosition.isInside(context)` boundary before sorting/capping. Omitted accounting must report both out-of-scope entities and cap-truncated in-scope entities.
+- Follow-up decision: do not silently fall back to operate-only context when the default one-chunk horizontal/five-block vertical expansion cannot fit the configured cap; that behavior needs explicit product/UI handling tomorrow.
+
+## TDD and verification evidence
+- RED: `./gradlew test --tests 'com.magician.worldedit.client.chunk.RegionInspectionTest.summary excludes out of context block entities and reports them omitted' --no-daemon` failed as expected before the filter existed.
+- GREEN: focused `RegionInspectionTest` passed after the minimal repair.
+- Full verification: `./gradlew test build --no-daemon` and `git diff --check` passed.
+- Independent review: PASS. The reviewer confirmed the shared predicate handles negative coordinates with `Math.floorDiv`, the excluded entity cannot reach the result/prompt, and omission accounting retains the previous cap semantics.
+
+## Previous findings
+
 
 ## Restored repository state
 - Repository: `D:/Parrot works/worldedit-magician-1.21.11`
