@@ -66,6 +66,13 @@ object AiChatRequestFactory {
             providerName = "Gemini",
             url = "${OpenAiSettingsStore.normalizeGeminiBaseUrl(settings.geminiBaseUrl)}/models/${settings.geminiSelectedModel}:generateContent",
             body = JsonObject().apply {
+                systemPrompt?.takeIf(String::isNotBlank)?.let { instructions ->
+                    add("systemInstruction", JsonObject().apply {
+                        add("parts", JsonArray().apply {
+                            add(JsonObject().apply { addProperty("text", instructions) })
+                        })
+                    })
+                }
                 add("contents", JsonArray().apply {
                     add(JsonObject().apply {
                         add("parts", JsonArray().apply {
@@ -181,7 +188,8 @@ object AiChatRequestFactory {
     ): String = JsonObject().apply {
         addProperty("model", settings.claudeSelectedModel)
         addProperty("max_tokens", settings.maxOutputTokens)
-        add("messages", messagesWithSystemAndHistory(prompt, systemPrompt, history))
+        systemPrompt?.takeIf(String::isNotBlank)?.let { addProperty("system", it) }
+        add("messages", messagesWithHistory(prompt, history))
         if (thinkingMode != ExtendedThinkingMode.OFF) {
             add("thinking", JsonObject().apply {
                 addProperty("type", "enabled")
@@ -207,6 +215,13 @@ object AiChatRequestFactory {
                 addProperty("content", systemPrompt)
             })
         }
+        addAll(messagesWithHistory(prompt, history))
+    }
+
+    private fun messagesWithHistory(
+        prompt: String,
+        history: List<ChatTurn>,
+    ): JsonArray = JsonArray().apply {
         history.forEach { turn ->
             add(JsonObject().apply {
                 addProperty("role", "user")

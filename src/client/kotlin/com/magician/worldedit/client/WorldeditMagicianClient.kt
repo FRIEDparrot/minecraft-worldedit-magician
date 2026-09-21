@@ -29,6 +29,7 @@ import com.magician.worldedit.client.command.AgentResponsePresentation
 import com.magician.worldedit.client.command.FlowParseResult
 import com.magician.worldedit.client.command.FlowResponseParser
 import com.magician.worldedit.client.command.FlowRequestQueue
+import com.magician.worldedit.client.command.FlowSessionInstructions
 import com.magician.worldedit.client.command.MinecraftCommandExecutor
 import com.magician.worldedit.client.command.MinecraftCommandWhitelist
 import com.magician.worldedit.client.command.wcl.WclResult
@@ -602,9 +603,15 @@ object WorldeditMagicianClient : ClientModInitializer {
     }
 
     private fun startFlow(prompt: String, settings: OpenAiSettings = OpenAiSettingsStore.load()) {
+        val session = WemcSessionManager.current()
+        if (session == null) {
+            sendMessage("No active chat session. Run /wemc chat init first.")
+            return
+        }
         val flow = ActiveFlow(
             originalPrompt = prompt,
             settings = settings,
+            instructions = FlowSessionInstructions.capture(session),
             controller = AgentFlowController(AgentOperationSettingsStore.load()),
             scope = ChunkSelectionState.agentRegionScopeOrNull(),
         )
@@ -731,6 +738,7 @@ object WorldeditMagicianClient : ClientModInitializer {
             flowPrompt,
             AgentOperationMode.FLOW,
             thinkingMode,
+            systemPrompt = flow.instructions.systemPrompt,
             capabilities = HostedRequestCapabilities(webSearchEnabled = flow.settings.hostedWebSearchEnabled),
         ).thenAccept { result ->
             Minecraft.getInstance().execute {
@@ -1122,6 +1130,7 @@ object WorldeditMagicianClient : ClientModInitializer {
     private data class ActiveFlow(
         val originalPrompt: String,
         val settings: OpenAiSettings,
+        val instructions: FlowSessionInstructions,
         val controller: AgentFlowController,
         val scope: AgentRegionScope?,
     )

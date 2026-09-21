@@ -178,6 +178,43 @@ class AiChatRequestFactoryTest {
     }
 
     @Test
+    fun `Gemini carries FLOW instructions in systemInstruction`() {
+        val request = AiChatRequestFactory.create(
+            OpenAiSettings(
+                selectedProvider = AiProvider.GEMINI,
+                geminiApiKey = "gemini-key",
+                geminiSelectedModel = "gemini-test",
+            ),
+            prompt = "continue the FLOW",
+            systemPrompt = "[wemc/v1] immutable WCL rules",
+        )
+        val body = JsonParser.parseString(request.body).asJsonObject
+
+        assertEquals("[wemc/v1] immutable WCL rules", body.getAsJsonObject("systemInstruction")
+            .getAsJsonArray("parts")[0].asJsonObject.get("text").asString)
+        assertEquals("continue the FLOW", body.getAsJsonArray("contents")[0].asJsonObject
+            .getAsJsonArray("parts")[0].asJsonObject.get("text").asString)
+    }
+
+    @Test
+    fun `Claude carries FLOW instructions in its top level system field`() {
+        val request = AiChatRequestFactory.create(
+            OpenAiSettings(
+                selectedProvider = AiProvider.CLAUDE,
+                claudeApiKey = "claude-key",
+                claudeSelectedModel = "claude-test",
+            ),
+            prompt = "continue the FLOW",
+            systemPrompt = "[wemc/v1] immutable WCL rules",
+        )
+        val body = JsonParser.parseString(request.body).asJsonObject
+
+        assertEquals("[wemc/v1] immutable WCL rules", body.get("system").asString)
+        assertEquals("user", body.getAsJsonArray("messages")[0].asJsonObject.get("role").asString)
+        assertEquals("continue the FLOW", body.getAsJsonArray("messages")[0].asJsonObject.get("content").asString)
+    }
+
+    @Test
     fun `DeepSeek uses its configured compatible chat completions API`() {
         val request = AiChatRequestFactory.create(
             OpenAiSettings(
