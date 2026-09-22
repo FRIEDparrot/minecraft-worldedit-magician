@@ -43,7 +43,11 @@ object ChunkSelectionHud {
         graphics.drawString(font, Component.literal("Player: ${blockPos.x}, ${blockPos.y}, ${blockPos.z}  ·  Chunk[$playerChunk.x, ${playerChunk.z}]"), LEFT + 9, TOP + 20, 0xFFD8E0EA.toInt())
         val contextScope = state.agentRegionScopeOrNull()
         val contextLine = contextScope?.let {
-            "Context: ${it.context.chunks.size} read-only chunks  ·  Y ${it.context.minY}–${it.context.maxY}"
+            when (it.contextCoverage) {
+                ContextCoverage.DEFAULT_MARGIN -> "Context: +1 chunk / ±5Y · ${it.context.chunks.size} read-only chunks"
+                ContextCoverage.CAPPED_TO_OPERATE -> "Context capped: operate-only · ${it.context.chunks.size} read-only chunks"
+                ContextCoverage.EXPLICIT -> "Context: ${it.context.chunks.size} read-only chunks  ·  Y ${it.context.minY}–${it.context.maxY}"
+            }
         } ?: "Context: confirm a selection to define the read boundary"
 
         graphics.drawString(font, Component.literal("$activeCount chunk${if (activeCount == 1) "" else "s"} selected  ·  Y ${state.config.minY}–${state.config.maxY}"), LEFT + 9, TOP + 37, 0xFFAAB7C8.toInt())

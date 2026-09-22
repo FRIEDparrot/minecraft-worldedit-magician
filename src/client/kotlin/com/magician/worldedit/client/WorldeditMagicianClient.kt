@@ -9,6 +9,7 @@ import com.magician.worldedit.client.chunk.ChunkSelectionMode
 import com.magician.worldedit.client.chunk.ChunkSelectionStageResult
 import com.magician.worldedit.client.chunk.ChunkSelectionState
 import com.magician.worldedit.client.chunk.ChunkSelectionWorldRenderer
+import com.magician.worldedit.client.chunk.ContextCoverage
 import com.magician.worldedit.client.chunk.DirectionalViewTool
 import com.magician.worldedit.client.chunk.LiveDirectionalViewInspection
 import com.magician.worldedit.client.chunk.LiveRegionInspection
@@ -414,7 +415,12 @@ object WorldeditMagicianClient : ClientModInitializer {
             return
         }
         val request = RegionInspectionRequest(scope)
-        sendMessage("Inspecting ${scope.context.chunks.size} context chunk(s) read-only...")
+        val coverageNotice = if (scope.contextCoverage == ContextCoverage.CAPPED_TO_OPERATE) {
+            " Context is capped to the operate boundary; neighboring chunks and vertical margin are unavailable."
+        } else {
+            ""
+        }
+        sendMessage("Inspecting ${scope.context.chunks.size} context chunk(s) read-only...$coverageNotice")
         LiveRegionInspection.inspectAsync(request).whenComplete { result, error ->
             Minecraft.getInstance().execute {
                 if (error != null) {
@@ -610,6 +616,9 @@ object WorldeditMagicianClient : ClientModInitializer {
         )
         activeFlow = flow
         flow.controller.start()
+        if (flow.scope?.contextCoverage == ContextCoverage.CAPPED_TO_OPERATE) {
+            sendMessage("[WEMC] Context cap reached: this FLOW can read only the confirmed operate area, not its normal neighboring margin.")
+        }
         sendFlowRequest(flow, prompt)
     }
 

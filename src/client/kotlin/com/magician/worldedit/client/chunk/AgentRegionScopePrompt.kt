@@ -25,6 +25,7 @@ object AgentRegionScopePrompt {
         appendLine("dimension: ${scope.dimensionKey}")
         appendLine("operate (write): chunks=${formatChunks(scope.operate.chunks)} y=${scope.operate.minY}..${scope.operate.maxY}")
         appendLine("context (read-only): chunks=${formatChunks(scope.context.chunks)} y=${scope.context.minY}..${scope.context.maxY}")
+        appendLine(contextCoverageLine(scope.contextCoverage))
         appendLine("Only the operate area is writable; context is observation-only.")
         appendLine("Known WCL block/entity coordinates are checked before dispatch; keep writes inside operate and clone sources inside context.")
         append("=== END WEMC REGION SCOPE ===")
@@ -33,4 +34,10 @@ object AgentRegionScopePrompt {
     private fun formatChunks(chunks: Set<ChunkPos>): String = chunks
         .sortedWith(compareBy<ChunkPos> { it.x }.thenBy { it.z })
         .joinToString(prefix = "[", postfix = "]") { "(${it.x},${it.z})" }
+
+    private fun contextCoverageLine(coverage: ContextCoverage): String = when (coverage) {
+        ContextCoverage.DEFAULT_MARGIN -> "context coverage: default margin; one chunk horizontally and five blocks vertically around operate."
+        ContextCoverage.CAPPED_TO_OPERATE -> "context coverage: capped to operate-only; no neighboring chunk or vertical margin is available."
+        ContextCoverage.EXPLICIT -> "context coverage: explicit read-only boundary."
+    }
 }
