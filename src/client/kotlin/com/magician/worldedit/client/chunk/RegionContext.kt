@@ -95,7 +95,7 @@ class AgentRegionScope private constructor(
             return AgentRegionScope(operate, context, contextCoverage, dimensionKey)
         }
 
-        /** Creates the standard one-chunk/five-block read margin for an operation. */
+        /** Resolves the standard one-chunk/five-block margin when it fits, or an explicitly marked operate-only boundary otherwise. */
         fun defaultFor(
             operate: OperateRegion,
             maxContextChunks: Int = ContextRegion.MAX_CONTEXT_CHUNKS,
