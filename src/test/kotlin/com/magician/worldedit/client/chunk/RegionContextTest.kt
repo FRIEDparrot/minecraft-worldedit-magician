@@ -155,6 +155,54 @@ class RegionContextTest {
     }
 
     @Test
+    fun `agent scope marks an operate-only context when the configured cap excludes its default margin`() {
+        ChunkSelectionState.configureRegionLimits(maxOperateChunks = 1, maxContextChunks = 8)
+        ChunkSelectionState.stageChunkSelection(ChunkPos(0, 0), "minecraft:overworld")
+        ChunkSelectionState.confirmPendingSelection()
+
+        val scope = requireNotNull(ChunkSelectionState.agentRegionScopeOrNull())
+
+        assertEquals(ContextCoverage.CAPPED_TO_OPERATE, scope.contextCoverage)
+        assertTrue(scope.context.contains(scope.operate))
+    }
+
+    @Test
+    fun `agent scope marks the normal one-chunk five-block context margin when capacity permits it`() {
+        ChunkSelectionState.stageChunkSelection(ChunkPos(0, 0), "minecraft:overworld")
+        ChunkSelectionState.confirmPendingSelection()
+
+        val scope = requireNotNull(ChunkSelectionState.agentRegionScopeOrNull())
+
+        assertEquals(ContextCoverage.DEFAULT_MARGIN, scope.contextCoverage)
+        assertEquals(setOf(ChunkPos(0, 0)), scope.operate.chunks)
+        assertEquals(((-1)..1).flatMap { x -> ((-1)..1).map { z -> ChunkPos(x, z) } }.toSet(), scope.context.chunks)
+        assertEquals(scope.operate.minY - 5, scope.context.minY)
+        assertEquals(scope.operate.maxY + 5, scope.context.maxY)
+    }
+
+    @Test
+    fun `only the default resolver may label a context as the default margin`() {
+        val operate = OperateRegion(setOf(ChunkPos(0, 0)), minY = 64, maxY = 70)
+
+        assertFailsWith<IllegalArgumentException> {
+            AgentRegionScope.create(
+                operate = operate,
+                context = ContextRegion(operate.chunks, operate.minY, operate.maxY),
+                contextCoverage = ContextCoverage.DEFAULT_MARGIN,
+            )
+        }
+    }
+
+    @Test
+    fun `context resolver rejects a cap smaller than the operate region`() {
+        val operate = OperateRegion(setOf(ChunkPos(0, 0), ChunkPos(1, 0)), minY = 64, maxY = 70)
+
+        assertFailsWith<IllegalArgumentException> {
+            ContextRegion.resolveDefaultFor(operate, maxContextChunks = 1)
+        }
+    }
+
+    @Test
     fun `region chunk snapshots reject MutableSet casts`() {
         val operate = OperateRegion(setOf(ChunkPos(0, 0)), minY = 0, maxY = 0)
         val context = ContextRegion.defaultFor(operate)

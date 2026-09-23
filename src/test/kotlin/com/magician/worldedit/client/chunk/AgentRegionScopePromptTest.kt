@@ -57,6 +57,19 @@ class AgentRegionScopePromptTest {
     }
 
     @Test
+    fun `scope prompt warns when context was capped to the operate boundary`() {
+        val scope = AgentRegionScope.create(
+            operate = OperateRegion(setOf(ChunkPos(0, 0)), minY = 64, maxY = 70),
+            context = ContextRegion(setOf(ChunkPos(0, 0)), minY = 64, maxY = 70),
+            contextCoverage = ContextCoverage.CAPPED_TO_OPERATE,
+        )
+
+        val message = AgentRegionScopePrompt.describe(scope)
+
+        assertTrue(message.contains("context coverage: capped to operate-only; no neighboring chunk or vertical margin is available."))
+    }
+
+    @Test
     fun `appending no scope preserves the player message exactly`() {
         assertEquals("  Build a bridge  ", AgentRegionScopePrompt.appendTo("  Build a bridge  ", null))
     }

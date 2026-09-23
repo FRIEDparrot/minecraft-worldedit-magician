@@ -29,6 +29,22 @@ class OperateRegion(
         ContextRegion.defaultFor(this, maxContextChunks)
 }
 
+/** Describes how much read-only context a scope could retain within its configured cap. */
+enum class ContextCoverage {
+    /** The standard one-chunk horizontal and five-block vertical margin is available. */
+    DEFAULT_MARGIN,
+    /** The configured cap could not hold the default margin, so only the operate area is readable. */
+    CAPPED_TO_OPERATE,
+    /** A caller deliberately supplied a context boundary instead of using the default resolver. */
+    EXPLICIT,
+}
+
+/** Immutable result of resolving the standard context boundary for an operate region. */
+data class ContextResolution(
+    val context: ContextRegion,
+    val coverage: ContextCoverage,
+)
+
 /**
  * The validated pair that future agent tools must consume. It prevents a read
  * path from accidentally using a manually narrowed context for a wider write
@@ -37,6 +53,7 @@ class OperateRegion(
 class AgentRegionScope private constructor(
     val operate: OperateRegion,
     val context: ContextRegion,
+    val contextCoverage: ContextCoverage,
     /** Stable Minecraft dimension key captured when the region was selected. */
     val dimensionKey: String,
 ) {
@@ -55,7 +72,8 @@ class AgentRegionScope private constructor(
             operate.maxY == other.operate.maxY &&
             context.chunks == other.context.chunks &&
             context.minY == other.context.minY &&
-            context.maxY == other.context.maxY
+            context.maxY == other.context.maxY &&
+            contextCoverage == other.contextCoverage
 
     companion object {
         /** Creates a scope only when the read context fully encloses the write area. */
@@ -63,17 +81,29 @@ class AgentRegionScope private constructor(
             operate: OperateRegion,
             context: ContextRegion,
             dimensionKey: String = UNSPECIFIED_DIMENSION_KEY,
+            contextCoverage: ContextCoverage = ContextCoverage.EXPLICIT,
         ): AgentRegionScope {
             require(context.contains(operate)) { "Context region must contain the complete operate region." }
-            return AgentRegionScope(operate, context, dimensionKey)
+            require(contextCoverage != ContextCoverage.DEFAULT_MARGIN) {
+                "Only defaultFor may assign default-margin coverage."
+            }
+            if (contextCoverage == ContextCoverage.CAPPED_TO_OPERATE) {
+                require(context.chunks == operate.chunks && context.minY == operate.minY && context.maxY == operate.maxY) {
+                    "A capped context must be exactly the operate boundary."
+                }
+            }
+            return AgentRegionScope(operate, context, contextCoverage, dimensionKey)
         }
 
-        /** Creates the standard one-chunk/five-block read margin for an operation. */
+        /** Resolves the standard one-chunk/five-block margin when it fits, or an explicitly marked operate-only boundary otherwise. */
         fun defaultFor(
             operate: OperateRegion,
             maxContextChunks: Int = ContextRegion.MAX_CONTEXT_CHUNKS,
             dimensionKey: String = UNSPECIFIED_DIMENSION_KEY,
-        ): AgentRegionScope = create(operate, operate.defaultContext(maxContextChunks), dimensionKey)
+        ): AgentRegionScope {
+            val resolution = ContextRegion.resolveDefaultFor(operate, maxContextChunks)
+            return AgentRegionScope(operate, resolution.context, resolution.coverage, dimensionKey)
+        }
 
         private const val UNSPECIFIED_DIMENSION_KEY = "unspecified"
     }
@@ -135,6 +165,41 @@ class ContextRegion(
             maxContextChunks = maxContextChunks,
         )
 
+        /**
+         * Resolves the default context without silently dropping its margin.
+         *
+         * When the selected read cap cannot contain the full normal neighborhood,
+         * use the operate region itself as the conservative read boundary and
+         * preserve that fact for the player and agent.
+         */
+        fun resolveDefaultFor(
+            operate: OperateRegion,
+            maxContextChunks: Int = MAX_CONTEXT_CHUNKS,
+        ): ContextResolution {
+            require(maxContextChunks in 1..MAX_CONTEXT_CHUNKS) {
+                "Context chunk limit must be between 1 and $MAX_CONTEXT_CHUNKS."
+            }
+            require(maxContextChunks >= operate.chunks.size) {
+                "Context chunk limit must contain the complete operate region."
+            }
+            val contextChunks = expandedChunks(operate, DEFAULT_HORIZONTAL_EXPANSION_CHUNKS)
+            return if (contextChunks.size <= maxContextChunks) {
+                ContextResolution(
+                    context = ContextRegion(
+                        chunks = contextChunks,
+                        minY = saturatingOffset(operate.minY, -DEFAULT_VERTICAL_EXPANSION_BLOCKS),
+                        maxY = saturatingOffset(operate.maxY, DEFAULT_VERTICAL_EXPANSION_BLOCKS),
+                    ),
+                    coverage = ContextCoverage.DEFAULT_MARGIN,
+                )
+            } else {
+                ContextResolution(
+                    context = ContextRegion(operate.chunks, operate.minY, operate.maxY),
+                    coverage = ContextCoverage.CAPPED_TO_OPERATE,
+                )
+            }
+        }
+
         /** Creates a context region with non-negative horizontal and vertical margins. */
         fun expandedFor(
             operate: OperateRegion,
@@ -153,15 +218,7 @@ class ContextRegion(
             require(maxContextChunks in 1..MAX_CONTEXT_CHUNKS) {
                 "Context chunk limit must be between 1 and $MAX_CONTEXT_CHUNKS."
             }
-            val contextChunks = buildSet {
-                operate.chunks.forEach { chunk ->
-                    for (deltaX in -horizontalExpansionChunks..horizontalExpansionChunks) {
-                        for (deltaZ in -horizontalExpansionChunks..horizontalExpansionChunks) {
-                            add(ChunkPos(saturatingOffset(chunk.x, deltaX), saturatingOffset(chunk.z, deltaZ)))
-                        }
-                    }
-                }
-            }
+            val contextChunks = expandedChunks(operate, horizontalExpansionChunks)
             require(contextChunks.size <= maxContextChunks) {
                 "Context expansion would exceed the $maxContextChunks chunk limit."
             }
@@ -174,6 +231,16 @@ class ContextRegion(
 
         private fun saturatingOffset(value: Int, offset: Int): Int =
             (value.toLong() + offset.toLong()).coerceIn(Int.MIN_VALUE.toLong(), Int.MAX_VALUE.toLong()).toInt()
+
+        private fun expandedChunks(operate: OperateRegion, horizontalExpansionChunks: Int): Set<ChunkPos> = buildSet {
+            operate.chunks.forEach { chunk ->
+                for (deltaX in -horizontalExpansionChunks..horizontalExpansionChunks) {
+                    for (deltaZ in -horizontalExpansionChunks..horizontalExpansionChunks) {
+                        add(ChunkPos(saturatingOffset(chunk.x, deltaX), saturatingOffset(chunk.z, deltaZ)))
+                    }
+                }
+            }
+        }
 
         private fun saturatingMultiply(vararg factors: Long): Long = factors.fold(1L) { product, factor ->
             runCatching { Math.multiplyExact(product, factor) }.getOrDefault(Long.MAX_VALUE)
