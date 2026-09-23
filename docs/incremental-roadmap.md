@@ -47,11 +47,18 @@ This roadmap intentionally keeps each milestone small enough to compile, test, a
 - Reject scoped writes when FLOW starts without a confirmed selection, and reject position-changing `execute` wrappers that cannot be proven safe.
 - Keep the change UI-free: the existing WCL compilation error path tells the agent how to correct its next batch.
 
-## Next working day — terminal verification and retry resilience
+## Completed today — terminal verification boundary
 
-- Decide whether terminal `<eof>` batches should also run the same verification before ending the flow, while preserving the one-request budget contract.
+- Route terminal `<eof>` batches through the same bounded post-edit observation checkpoint as non-terminal batches.
+- End the flow only after a fresh observation succeeds; a missing or failed final observation cannot be reported as success.
+- Preserve the one-request budget contract because terminal verification does not request another model response.
+- Keep the runtime change UI-free: the existing activity messages distinguish final-result monitoring from continuation monitoring.
+
+## Next working day — retry resilience
+
 - Add a bounded retry policy for transient observation failures rather than ending the flow immediately.
-- Exercise the checkpoint and write-boundary rejection in a running integrated-server client and verify the exact chat/status presentation.
+- Define retry count, backoff, and interaction with the AI/server-step budgets before implementation.
+- Exercise delayed and failed observation reads in a running integrated-server client and verify the exact chat/status presentation.
 
 ## Later — build verification loop
 

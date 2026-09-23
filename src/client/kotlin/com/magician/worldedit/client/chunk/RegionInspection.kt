@@ -192,7 +192,9 @@ object RegionInspectionSummarizer {
             .filter { it.position.isInside(request.scope.context) }
             .take(request.maxBlocks)
             .toList()
-        val boundedEntities = blockEntities
+        val inScopeEntities = blockEntities.filter { it.position.isInside(request.scope.context) }
+        val outOfScopeEntityCount = (blockEntities.size - inScopeEntities.size).toLong()
+        val boundedEntities = inScopeEntities
             .asSequence()
             .sortedWith(compareBy<RegionBlockEntitySample> { it.position.x }
                 .thenBy { it.position.y }
@@ -200,9 +202,9 @@ object RegionInspectionSummarizer {
                 .thenBy { it.typeId })
             .take(request.maxBlockEntities)
             .toList()
-        val knownOmittedEntities = maxOf(
+        val knownOmittedEntities = outOfScopeEntityCount + maxOf(
             omittedBlockEntityCount,
-            (blockEntities.size - boundedEntities.size).toLong(),
+            (inScopeEntities.size - boundedEntities.size).toLong(),
         )
         val paletteCounts = boundedSamples.groupingBy { it.blockId }.fold(0L) { count, _ -> count + 1L }
         val sortedPalette = paletteCounts.entries

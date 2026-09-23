@@ -297,6 +297,11 @@ sealed interface AgentFlowAction {
     data class ToolReady(val name: String, val argumentsJson: String, val displayText: String?) : AgentFlowAction
     /** A command batch completed and must be observed before the agent can propose a repair. */
     data class RequestPostEditObservation(val completedStepContext: String) : AgentFlowAction
+    /** Retry the mandatory read only; the prior WCL batch must never be dispatched again. */
+    data class RetryPostEditObservation(
+        val completedStepContext: String,
+        val retryAfterMillis: Long,
+    ) : AgentFlowAction
     /** WCL compilation failed; error report is sent back to the agent for correction. */
     data class WclCompilationFailed(val errorReport: String) : AgentFlowAction
 
@@ -317,9 +322,9 @@ sealed interface AgentFlowAction {
  *   AWAITING_AGENT → (plain text) → COMPLETED (display and end)
  *   AWAITING_PLAN_APPROVAL → (approve) → AWAITING_AGENT (planApproved=true, continuation prompt)
  *   AWAITING_PLAN_APPROVAL → (reject) → COMPLETED (silently)
- *   EXECUTING → (has eof) → COMPLETED
  *   EXECUTING → (batch complete) → AWAITING_POST_EDIT_OBSERVATION
- *   AWAITING_POST_EDIT_OBSERVATION → (fresh read) → AWAITING_AGENT
+ *   AWAITING_POST_EDIT_OBSERVATION → (fresh read, terminal batch) → COMPLETED
+ *   AWAITING_POST_EDIT_OBSERVATION → (fresh read, non-terminal batch) → AWAITING_AGENT
  */
 class AgentFlowController(private val settings: AgentOperationSettings) {
 
@@ -342,6 +347,8 @@ class AgentFlowController(private val settings: AgentOperationSettings) {
     private var serverStepCount = 0
     private var dispatchedCommands: List<String> = emptyList()
     private var pendingPostEditContext: String? = null
+    private var postEditObservationRetryCount = 0
+    private var terminalStepPending = false
     /** First WCL program bundled with a plan, held until approval. */
     private var pendingPlanWcl: String? = null
     private var pendingPlanIsEof = false
@@ -365,6 +372,8 @@ class AgentFlowController(private val settings: AgentOperationSettings) {
         pendingResponse = mutableListOf()
         dispatchedCommands = emptyList()
         pendingPostEditContext = null
+        postEditObservationRetryCount = 0
+        terminalStepPending = false
         return AgentFlowAction.Noop
     }
 
@@ -382,7 +391,8 @@ class AgentFlowController(private val settings: AgentOperationSettings) {
                 fail("AI request limit reached (${norm.maxAiRequests}).")
             } else {
                 currentStep++
-                state = if (result.isEof) FlowState.COMPLETED else FlowState.EXECUTING
+                state = FlowState.EXECUTING
+                terminalStepPending = result.isEof
                 AgentFlowAction.WclReady(result.wclSource, result.displayText, result.isEof)
             }
 
@@ -427,7 +437,8 @@ class AgentFlowController(private val settings: AgentOperationSettings) {
 
         return if (wcl != null) {
             currentStep = 1
-            state = if (isEof) FlowState.COMPLETED else FlowState.EXECUTING
+            state = FlowState.EXECUTING
+            terminalStepPending = isEof
             AgentFlowAction.WclReady(wcl, displayText = null, isEof = isEof)
         } else {
             if (aiRequestCount >= norm.maxAiRequests) {
@@ -482,13 +493,11 @@ class AgentFlowController(private val settings: AgentOperationSettings) {
             return fail("Server step limit reached ($serverStepCount / ${norm.maxServerSteps}).")
         }
 
-        // Feed results back to agent
-        if (aiRequestCount >= norm.maxAiRequests) {
-            return fail("AI request limit reached (${norm.maxAiRequests}).")
-        }
-
+        // A post-edit observation is mandatory even at the provider request limit.
+        // It does not send a provider request; a non-terminal continuation is budget-checked after it.
         // Reserve the continuation only after a fresh bounded read confirms the batch.
         pendingPostEditContext = buildCompletedStepContext()
+        postEditObservationRetryCount = 0
         state = FlowState.AWAITING_POST_EDIT_OBSERVATION
         queryDeadlineMillis = null
         quietDeadlineMillis = null
@@ -558,12 +567,17 @@ class AgentFlowController(private val settings: AgentOperationSettings) {
     fun onPostEditObservation(observation: String): AgentFlowAction {
         if (state != FlowState.AWAITING_POST_EDIT_OBSERVATION) return AgentFlowAction.Noop
         if (observation.isBlank()) return fail("Post-edit observation returned no data; no repair command may be proposed.")
-        if (aiRequestCount >= norm.maxAiRequests) {
-            return fail("AI request limit reached (${norm.maxAiRequests}).")
-        }
         val completedContext = pendingPostEditContext ?: return fail("Post-edit checkpoint is missing its completed batch.")
         pendingPostEditContext = null
         serverStepCount++
+        if (terminalStepPending) {
+            terminalStepPending = false
+            state = FlowState.COMPLETED
+            return AgentFlowAction.FlowEnded(null)
+        }
+        if (aiRequestCount >= norm.maxAiRequests) {
+            return fail("AI request limit reached (${norm.maxAiRequests}).")
+        }
         aiRequestCount++
         state = FlowState.AWAITING_AGENT
         return AgentFlowAction.RequestContinuation(
@@ -574,6 +588,24 @@ class AgentFlowController(private val settings: AgentOperationSettings) {
                 append("=== END POST-EDIT OBSERVATION ===")
             },
             canRequestObservation = true,
+        )
+    }
+
+    /**
+     * Retries one transient read failure without repeating the completed WCL batch,
+     * consuming an AI request, or consuming another server step.
+     */
+    fun onPostEditObservationTransientFailure(message: String): AgentFlowAction {
+        if (state != FlowState.AWAITING_POST_EDIT_OBSERVATION) return AgentFlowAction.Noop
+        val completedContext = pendingPostEditContext
+            ?: return fail("Post-edit checkpoint is missing its completed batch.")
+        if (postEditObservationRetryCount >= MAX_POST_EDIT_OBSERVATION_RETRIES) {
+            return fail("Post-edit observation failed after retry: ${message.ifBlank { "unknown error" }}")
+        }
+        postEditObservationRetryCount++
+        return AgentFlowAction.RetryPostEditObservation(
+            completedStepContext = completedContext,
+            retryAfterMillis = POST_EDIT_OBSERVATION_RETRY_DELAY_MILLIS,
         )
     }
 
@@ -600,6 +632,8 @@ class AgentFlowController(private val settings: AgentOperationSettings) {
 
     companion object {
         private const val RESPONSE_QUIET_MILLIS = 500L
+        private const val POST_EDIT_OBSERVATION_RETRY_DELAY_MILLIS = 1_000L
+        private const val MAX_POST_EDIT_OBSERVATION_RETRIES = 1
         private const val MAX_RECORDED_COMMANDS = 64
     }
 }

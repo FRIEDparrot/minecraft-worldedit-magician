@@ -180,6 +180,57 @@ reason: Need to clear area first
     }
 
     @Test
+    fun `terminal flow batch is verified before the flow ends`() {
+        val controller = AgentFlowController(AgentOperationSettings())
+        controller.start()
+
+        val ready = assertIs<AgentFlowAction.WclReady>(
+            controller.onAgentResponse(
+                """```wcl
+setblock ~ ~ ~ stone
+```
+<eof>""",
+            ),
+        )
+        assertTrue(ready.isEof)
+
+        controller.markStepDispatched(nowMillis = 0, commands = listOf("setblock 0 64 0 stone"))
+        val checkpoint = assertIs<AgentFlowAction.RequestPostEditObservation>(
+            controller.completeStepIfReady(nowMillis = 8_000),
+        )
+        assertTrue(checkpoint.completedStepContext.contains("setblock 0 64 0 stone"))
+
+        assertIs<AgentFlowAction.FlowEnded>(
+            controller.onPostEditObservation("verified terminal edit"),
+        )
+        assertIs<AgentFlowAction.Noop>(controller.onAgentResponse("""```wcl
+setblock ~1 ~ ~ stone
+```"""))
+    }
+
+    @Test
+    fun `AI request limit waits for mandatory post-edit observation`() {
+        val terminal = AgentFlowController(AgentOperationSettings(maxAiRequests = 1))
+        terminal.start()
+        assertIs<AgentFlowAction.WclReady>(
+            terminal.onAgentResponse("```wcl\nsetblock ~ ~ ~ stone\n```\n<eof>"),
+        )
+        terminal.markStepDispatched(nowMillis = 0)
+        assertIs<AgentFlowAction.RequestPostEditObservation>(terminal.completeStepIfReady(nowMillis = 8_000))
+        assertIs<AgentFlowAction.FlowEnded>(terminal.onPostEditObservation("verified terminal edit"))
+
+        val nonTerminal = AgentFlowController(AgentOperationSettings(maxAiRequests = 1))
+        nonTerminal.start()
+        assertIs<AgentFlowAction.WclReady>(nonTerminal.onAgentResponse("```wcl\nsetblock ~ ~ ~ stone\n```"))
+        nonTerminal.markStepDispatched(nowMillis = 0)
+        assertIs<AgentFlowAction.RequestPostEditObservation>(nonTerminal.completeStepIfReady(nowMillis = 8_000))
+        val continuationLimit = assertIs<AgentFlowAction.Failed>(
+            nonTerminal.onPostEditObservation("verified non-terminal edit"),
+        )
+        assertTrue(continuationLimit.message.contains("AI request limit reached"))
+    }
+
+    @Test
     fun `one-step flow response does not require plan approval`() {
         val controller = AgentFlowController(AgentOperationSettings())
         controller.start()
@@ -238,6 +289,29 @@ reason: Need to clear area first
         assertIs<AgentFlowAction.WclReady>(
             controller.onAgentResponse("```wcl\nsetblock ~1 ~ ~ stone\n```")
         )
+    }
+
+    @Test
+    fun `transient post-edit inspection failure requests one retry without consuming a budget`() {
+        val controller = AgentFlowController(AgentOperationSettings(maxAiRequests = 1))
+        controller.start()
+        assertIs<AgentFlowAction.WclReady>(
+            controller.onAgentResponse("```wcl\nsetblock ~ ~ ~ stone\n```")
+        )
+        controller.markStepDispatched(nowMillis = 0, commands = listOf("setblock 0 64 0 stone"))
+        val checkpoint = assertIs<AgentFlowAction.RequestPostEditObservation>(
+            controller.completeStepIfReady(nowMillis = 8_000),
+        )
+
+        val retry = assertIs<AgentFlowAction.RetryPostEditObservation>(
+            controller.onPostEditObservationTransientFailure("temporary chunk read failure"),
+        )
+        assertEquals(1_000L, retry.retryAfterMillis)
+        assertEquals(checkpoint.completedStepContext, retry.completedStepContext)
+        assertIs<AgentFlowAction.Failed>(
+            controller.onPostEditObservationTransientFailure("temporary chunk read failure"),
+        )
+        assertIs<AgentFlowAction.Noop>(controller.onAgentResponse("```wcl\nsetblock ~1 ~ ~ stone\n```"))
     }
 
     @Test
@@ -445,9 +519,8 @@ reason: Need to clear area first
         assertEquals(ExtendedThinkingMode.OFF, controller.thinkingModeForStep())
     }
 
-    // Note: AI request limit is checked only in AWAITING_AGENT state.
-    // Testing it requires simulating EXECUTING→AWAITING_AGENT transitions via
-    // completeStepIfReady() with server responses or timeouts — not practical in unit tests.
+    // A dispatched batch always receives its mandatory post-edit observation.
+    // The provider-request limit applies only if a non-terminal continuation is needed.
 
     @Test
     fun `SINGLE mode prompt mentions SINGLE and wemc`() {
